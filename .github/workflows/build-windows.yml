@@ -24,7 +24,7 @@ jobs:
       - name: Compile check
         run: python -m py_compile font_studio.py
       - name: Build EXE
-        run: pyinstaller --noconfirm --clean --onefile --windowed --name FontStudio --collect-all PySide6 --collect-all fontTools font_studio.py
+        run: pyinstaller --noconfirm --clean --onefile --windowed --name FontStudio --icon assets/fontstudio.ico --add-data "assets/fontstudio.ico;assets" --collect-all PySide6 --collect-all fontTools font_studio.py
       - name: Upload EXE
         uses: actions/upload-artifact@v4
         with:
