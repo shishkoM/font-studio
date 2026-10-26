@@ -7,13 +7,13 @@ from dataclasses import dataclass
 from typing import Optional
 
 from PySide6.QtCore import Qt, QAbstractListModel, QModelIndex, QObject, Signal, QRunnable, QThreadPool, QSize, QSortFilterProxyModel
-from PySide6.QtGui import QFont, QFontDatabase, QPainter, QColor, QPen, QFontMetrics
+from PySide6.QtGui import QFont, QFontDatabase, QPainter, QColor, QPen, QFontMetrics, QIcon
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QComboBox, QSlider, QCheckBox, QListView, QProgressBar, QFileDialog, QMessageBox,
     QDialog, QTextEdit, QSpinBox, QDialogButtonBox, QFrame, QMenu, QSplitter, QToolButton, QStatusBar, QStyle, QColorDialog)
 
 APP_NAME = "Font Studio"
-SAMPLE_SENTENCE = "דג סקרן שט לו בים זך אך לפתע פגש חבורה שצצה כך"
+SAMPLE_SENTENCE = "דג סקרן שט לו בים זך אך לפתע פגש חבורה נחמדה שצצה כך"
 SAMPLE_ALPHABET = "אבגדהוזחטיכלמנסעפצקרשת"
 EXTENSIONS = {'.ttf', '.otf', '.ttc', '.otc'}
 LANGUAGE_LABELS = [('all', 'כל השפות'), ('he', 'עברית'), ('en', 'אנגלית / לטינית'), ('ar', 'ערבית'), ('ru', 'קירילית'), ('el', 'יוונית'), ('zh', 'סינית'), ('ja', 'יפנית'), ('ko', 'קוריאנית')]
@@ -276,19 +276,26 @@ class TryDialog(QDialog):
         self.text=QTextEdit(); self.text.setPlainText(SAMPLE_SENTENCE); self.text.setLayoutDirection(Qt.LayoutDirection.RightToLeft); self.text.setPlaceholderText('הקלד כאן — הטקסט יוצג ישירות בגופן הנבחר'); layout.addWidget(self.text,1)
         buttons=QDialogButtonBox(QDialogButtonBox.StandardButton.Close); buttons.rejected.connect(self.reject); buttons.accepted.connect(self.accept); layout.addWidget(buttons)
         self.weight.currentIndexChanged.connect(self.refresh); self.size.valueChanged.connect(self.refresh); self.refresh()
+        # Focus the editor as soon as the dialog appears, so typing works immediately.
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(0, self.text.setFocus)
     def refresh(self):
         path=self.weight.currentData(); fid=-1
         if path and Path(path).is_file():
             if path not in self._font_ids: self._font_ids[path]=QFontDatabase.addApplicationFont(path)
             fid=self._font_ids[path]
         families=QFontDatabase.applicationFontFamilies(fid) if fid >= 0 else []
-        font=QFont(families[0] if families else 'Segoe UI'); font.setPointSize(self.size.value()); self.text.setFont(font)
+        font=QFont(families[0] if families else 'Segoe UI'); font.setPointSize(self.size.value())
+        # Qt's application font registration exposes the family; explicitly apply the selected face/style too.
+        selected = self.weight.currentText().split(' (', 1)[0].strip()
+        if selected and selected.lower() not in ('regular', 'normal', 'book'): font.setStyleName(selected)
+        self.text.setFont(font)
         color=self.parent_window.settings.get('preview_color','#4e3a98') if self.parent_window else '#4e3a98'
         self.text.setStyleSheet(f'QTextEdit {{ color: {color}; }}')
 
 class FontStudio(QMainWindow):
     def __init__(self):
-        super().__init__(); self.setWindowTitle('Font Studio'); self.resize(1180,850); self.setMinimumSize(900,600); self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        super().__init__(); self.setWindowTitle('Font Studio'); self.setWindowIcon(QIcon(str(Path(getattr(sys, '_MEIPASS', ROOT)) / 'assets' / 'fontstudio.ico'))); self.resize(1180,850); self.setMinimumSize(900,600); self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.db=Database(); self.settings=load_settings(); self.pool=QThreadPool.globalInstance(); self.cancel_event=threading.Event(); self.busy=False
         self.model=FontListModel(); self.init_ui(); self.apply_theme(); self.refresh()
         if not self.settings.get('last_scan_done'):
@@ -479,6 +486,19 @@ from PySide6.QtCore import QTimer
 
 def main():
     app=QApplication(sys.argv); app.setApplicationName(APP_NAME); app.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-    win=FontStudio(); win.show(); sys.exit(app.exec())
+    icon_base = Path(getattr(sys, '_MEIPASS', ROOT))
+    icon_path = icon_base / 'assets' / 'fontstudio.ico'
+    if icon_path.exists(): app.setWindowIcon(QIcon(str(icon_path)))
+    # Show an immediate lightweight startup window before database and UI initialization.
+    splash = QWidget(); splash.setWindowTitle(APP_NAME); splash.setWindowIcon(QIcon(str(icon_path)))
+    splash.setFixedSize(360, 170); splash.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+    layout = QVBoxLayout(splash)
+    title = QLabel('Font Studio'); title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    title.setStyleSheet('font-size:24px;font-weight:700;padding:8px;'); layout.addWidget(title)
+    spinner = QLabel('◌  טוען את ספריית הגופנים…'); spinner.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    spinner.setStyleSheet('font-size:15px;padding:8px;'); layout.addWidget(spinner)
+    splash.show(); app.processEvents()
+    win = FontStudio(); win.show(); splash.close()
+    sys.exit(app.exec())
 
 if __name__=='__main__': main()
