@@ -23,6 +23,19 @@ jobs:
         run: python -m pip install --upgrade pip && pip install -r requirements.txt pyinstaller
       - name: Compile check
         run: python -m py_compile font_studio.py
+      - name: Verify icon file
+        run: |
+          pwd
+          git branch --show-current
+          git ls-files assets
+          if (Test-Path "assets/fontstudio.ico") {
+            Write-Host "ICON FOUND"
+          } else {
+            Write-Host "ICON MISSING"
+            Get-ChildItem -Force
+            Get-ChildItem assets -Force
+            exit 1
+          }
       - name: Build EXE
         run: pyinstaller --noconfirm --clean --onefile --windowed --name FontStudio --icon assets/fontstudio.ico --add-data "assets/fontstudio.ico;assets" --collect-all PySide6 --collect-all fontTools font_studio.py
       - name: Upload EXE
