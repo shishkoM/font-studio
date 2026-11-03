@@ -2,7 +2,7 @@ name: Build Font Studio for Windows
 on:
   workflow_dispatch:
 permissions:
-  contents: read
+  contents: write
 jobs:
   build:
     runs-on: windows-latest
@@ -32,10 +32,14 @@ jobs:
           }
       - name: Build EXE
         run: pyinstaller --noconfirm --clean --onefile --windowed --name FontStudio --icon assets/fontstudio.ico --add-data "assets/fontstudio.ico;assets" --collect-all PySide6 --collect-all fontTools font_studio.py
-      - name: Upload EXE
-        uses: actions/upload-artifact@v4
+      - name: Publish EXE to GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: FontStudio-Windows-x64
-          path: dist/FontStudio.exe
-          if-no-files-found: error
-          retention-days: 30
+          tag_name: build-${{ github.run_number }}
+          name: Font Studio build ${{ github.run_number }}
+          body: |
+            Automated Windows x64 build of Font Studio.
+            Download FontStudio.exe below.
+          prerelease: true
+          make_latest: false
+          files: dist/FontStudio.exe
