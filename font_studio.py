@@ -154,7 +154,11 @@ class Database:
             except OSError: pass
     def rows(self, query='', favorites=False, language='all'):
         sql = '''SELECT family, COUNT(*) count, GROUP_CONCAT(DISTINCT subfamily) weights,
-                 MAX(favorite) favorite, MAX(installed) installed, SUM(missing) missing, MIN(path) path
+                 MAX(favorite) favorite, MAX(installed) installed, SUM(missing) missing,
+                 (SELECT f.path FROM fonts f WHERE f.family=fonts.family COLLATE NOCASE AND f.missing=0
+                  ORDER BY f.subfamily COLLATE NOCASE, f.path LIMIT 1) path,
+                 (SELECT f.subfamily FROM fonts f WHERE f.family=fonts.family COLLATE NOCASE AND f.missing=0
+                  ORDER BY f.subfamily COLLATE NOCASE, f.path LIMIT 1) preview_subfamily
                  FROM fonts WHERE 1=1'''
         args=[]
         if query:
@@ -216,7 +220,14 @@ class FamilyDelegate(QStyledItemDelegate):
                 self._font_ids[path]=QFontDatabase.addApplicationFont(path)
             fid=self._font_ids[path]
             families=QFontDatabase.applicationFontFamilies(fid) if fid >= 0 else []
-            if families: return QFont(families[0])
+            if families:
+                font = QFont(families[0])
+                # Match the exact face represented by the selected database path.
+                # This keeps previews stable when a relocated library is re-registered.
+                style = str(item.get('preview_subfamily', '')).split(' (', 1)[0].strip()
+                if style and style.lower() not in ('regular', 'normal', 'book'):
+                    font.setStyleName(style)
+                return font
         return QFont(item.get('family','Segoe UI'))
     def paint(self, painter, option, index):
         item=index.data(FontListModel.FamilyRole) or {}
