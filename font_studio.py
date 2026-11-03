@@ -316,27 +316,37 @@ class TryDialog(QDialog):
 class FontStudio(QMainWindow):
     def __init__(self):
         super().__init__(); self.setWindowTitle('Font Studio'); self.setWindowIcon(QIcon(str(Path(getattr(sys, '_MEIPASS', ROOT)) / 'assets' / 'fontstudio.ico'))); self.resize(1180,850); self.setMinimumSize(900,600); self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-        self.db=Database(); self.settings=load_settings(); self.pool=QThreadPool.globalInstance(); self.cancel_event=threading.Event(); self.busy=False
+        # Do not open SQLite or touch the font catalog before the real window is shown.
+        self.db=None; self.settings=load_settings(); self.pool=QThreadPool.globalInstance(); self.cancel_event=threading.Event(); self.busy=False
         self.model=FontListModel(); self._startup_worker=None
         self.init_ui(); self.apply_theme()
-        # Keep the main window responsive: load the existing catalog in a worker,
-        # then reconcile the portable library in the background.
         self.progress.setVisible(True); self.progress.setRange(0, 0)
-        self.statusBar().showMessage('טוען את רשימת הגופנים…')
-        QTimer.singleShot(0, self.load_initial_fonts)
-        QTimer.singleShot(350, self.scan_default_locations)
-    def load_initial_fonts(self):
-        worker=Worker(lambda _progress: self.db.rows(
-            self.search.text().strip(), self.favorites.isChecked(), self.current_language()))
+        self.statusBar().showMessage('פותח את Font Studio…')
+        self.scan_btn.setEnabled(False)
+        QTimer.singleShot(0, self.initialize_database)
+    def initialize_database(self):
+        def open_and_read(_progress):
+            db=Database()
+            try:
+                rows=db.rows(self.search.text().strip(), self.favorites.isChecked(), self.current_language())
+                return db, rows
+            except Exception:
+                db.close()
+                raise
+        worker=Worker(open_and_read)
         self._startup_worker=worker
-        worker.signals.done.connect(self.initial_fonts_loaded)
+        worker.signals.done.connect(self.initial_database_loaded)
         worker.signals.error.connect(self.worker_error)
         self.pool.start(worker)
-    def initial_fonts_loaded(self, items):
+    def initial_database_loaded(self, result):
+        self.db, items=result
         self.model.replace(items)
         self.progress.setVisible(False)
         self.progress.setRange(0, 100)
+        self.scan_btn.setEnabled(True)
         self.statusBar().showMessage(f'נטענו {len(items):,} משפחות גופנים')
+        # Start maintenance only after the window is visible and the catalog is ready.
+        QTimer.singleShot(0, self.scan_default_locations)
     def init_ui(self):
         central=QWidget(); self.setCentralWidget(central); root=QVBoxLayout(central); root.setContentsMargins(22,18,22,18); root.setSpacing(12)
         header=QHBoxLayout(); title=QLabel('Font Studio'); title.setObjectName('title'); header.addWidget(title); header.addStretch()
@@ -376,6 +386,7 @@ class FontStudio(QMainWindow):
     def change_language(self, _value):
         self.settings['language']=self.current_language(); save_settings(self.settings); self.refresh(); self.list.viewport().update()
     def refresh(self):
+        if self.db is None: return
         try: self.model.replace(self.db.rows(self.search.text().strip(), self.favorites.isChecked(), self.current_language()))
         except Exception as e: self.statusBar().showMessage(f'שגיאה בטעינת הרשימה: {e}')
     def scan_default_locations(self):
@@ -389,6 +400,9 @@ class FontStudio(QMainWindow):
         if busy: self.progress.setRange(0,0)
         else: self.progress.setRange(0,100)
     def run_scan(self, roots, initial=False, automatic=False):
+        if self.db is None:
+            if not automatic: self.statusBar().showMessage('מסד הנתונים עדיין נטען…')
+            return
         if self.busy:
             if not automatic: QMessageBox.information(self,'פעולה מתבצעת','כבר מתבצעת סריקה או פעולת ייבוא.')
             return
@@ -522,20 +536,29 @@ class FontStudio(QMainWindow):
                 label.setText(family+'\n\n'+text.text()); fid=QFontDatabase.addApplicationFont(path) if path and Path(path).is_file() else -1; fams=QFontDatabase.applicationFontFamilies(fid) if fid>=0 else []; label.setFont(QFont(fams[0] if fams else family,size.value()))
         text.textChanged.connect(update); size.valueChanged.connect(update); dialog.exec()
     def closeEvent(self,event):
-        try: save_settings(self.settings); self.db.close()
+        try:
+            save_settings(self.settings)
+            if self.db is not None: self.db.close()
         except Exception: pass
         event.accept()
 
 from PySide6.QtCore import QTimer
 
 def main():
+    # Give Windows a stable application identity so the taskbar uses the app icon.
+    if sys.platform == 'win32':
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID('shishko.FontStudio')
+        except Exception: pass
     app=QApplication(sys.argv); app.setApplicationName(APP_NAME); app.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
     icon_base = Path(getattr(sys, '_MEIPASS', ROOT))
     icon_path = icon_base / 'assets' / 'fontstudio.ico'
-    if icon_path.exists(): app.setWindowIcon(QIcon(str(icon_path)))
-    # Show the actual application window immediately. Catalog loading and
-    # library reconciliation continue asynchronously with visible progress.
+    app_icon = QIcon(str(icon_path)) if icon_path.is_file() else QIcon()
+    if not app_icon.isNull(): app.setWindowIcon(app_icon)
+    # Construct and show the real window before opening SQLite or scanning fonts.
     win = FontStudio()
+    if not app_icon.isNull(): win.setWindowIcon(app_icon)
     win.show()
     sys.exit(app.exec())
 
