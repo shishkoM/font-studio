@@ -85,6 +85,15 @@ def file_hash(path: Path) -> str:
             h.update(chunk)
     return h.hexdigest()
 
+
+def is_within_directory(path: Path, directory: Path) -> bool:
+    """Return whether path resolves inside directory, including nested folders."""
+    try:
+        Path(path).resolve().relative_to(Path(directory).resolve())
+        return True
+    except (OSError, ValueError):
+        return False
+
 def font_metadata(path: Path):
     try:
         from fontTools.ttLib import TTFont
@@ -298,9 +307,9 @@ class FontStudio(QMainWindow):
         super().__init__(); self.setWindowTitle('Font Studio'); self.setWindowIcon(QIcon(str(Path(getattr(sys, '_MEIPASS', ROOT)) / 'assets' / 'fontstudio.ico'))); self.resize(1180,850); self.setMinimumSize(900,600); self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.db=Database(); self.settings=load_settings(); self.pool=QThreadPool.globalInstance(); self.cancel_event=threading.Event(); self.busy=False
         self.model=FontListModel(); self.init_ui(); self.apply_theme(); self.refresh()
-        if not self.settings.get('last_scan_done'):
-            self.statusBar().showMessage('סריקה ראשונית תתחיל כעת. ניתן להמשיך להשתמש בממשק.')
-            QTimer.singleShot(350, self.scan_default_locations)
+        # Re-scan the portable library on every launch to repair paths after moves.
+        self.statusBar().showMessage('בודק את ספריית הגופנים המקומית…')
+        QTimer.singleShot(350, self.scan_default_locations)
     def init_ui(self):
         central=QWidget(); self.setCentralWidget(central); root=QVBoxLayout(central); root.setContentsMargins(22,18,22,18); root.setSpacing(12)
         header=QHBoxLayout(); title=QLabel('Font Studio'); title.setObjectName('title'); header.addWidget(title); header.addStretch()
@@ -343,12 +352,8 @@ class FontStudio(QMainWindow):
         try: self.model.replace(self.db.rows(self.search.text().strip(), self.favorites.isChecked(), self.current_language()))
         except Exception as e: self.statusBar().showMessage(f'שגיאה בטעינת הרשימה: {e}')
     def scan_default_locations(self):
-        locations=[]
-        if os.name=='nt':
-            locations += [Path(os.environ.get('WINDIR',r'C:\Windows'))/'Fonts', Path(os.environ.get('LOCALAPPDATA',Path.home()))/'Microsoft'/'Windows'/'Fonts']
-        locations.append(LIBRARY_DIR)
-        # First launch imports only the app's own library to avoid copying the whole Windows font folder by default.
-        self.run_scan([LIBRARY_DIR], initial=True)
+        # Only scan the managed library automatically; external folders remain opt-in.
+        self.run_scan([LIBRARY_DIR], initial=not self.settings.get('last_scan_done', False), automatic=True)
     def choose_folder(self):
         folder=QFileDialog.getExistingDirectory(self,'בחר תיקייה לייבוא גופנים',str(Path.home()))
         if folder: self.run_scan([Path(folder)])
@@ -356,9 +361,13 @@ class FontStudio(QMainWindow):
         self.busy=busy; self.scan_btn.setEnabled(not busy); self.cancel_btn.setVisible(busy); self.cancel_btn.setEnabled(busy); self.progress.setVisible(busy)
         if busy: self.progress.setRange(0,0)
         else: self.progress.setRange(0,100)
-    def run_scan(self, roots, initial=False):
-        if self.busy: QMessageBox.information(self,'פעולה מתבצעת','כבר מתבצעת סריקה או פעולת ייבוא.'); return
-        self.db.backup(); self.set_busy(True); self.cancel_event.clear()
+    def run_scan(self, roots, initial=False, automatic=False):
+        if self.busy:
+            if not automatic: QMessageBox.information(self,'פעולה מתבצעת','כבר מתבצעת סריקה או פעולת ייבוא.')
+            return
+        # Startup reconciliation is routine maintenance, not a user edit.
+        if not automatic: self.db.backup()
+        self.set_busy(True); self.cancel_event.clear()
         def work(progress):
             candidates=[]
             for root in roots:
@@ -375,41 +384,46 @@ class FontStudio(QMainWindow):
                     size=src.stat().st_size
                     if not size: skipped+=1; continue
                     digest=file_hash(src)
-                    with self.db.lock: exists=self.db.conn.execute('SELECT id, languages FROM fonts WHERE sha256=?',(digest,)).fetchone()
+                    with self.db.lock: exists=self.db.conn.execute('SELECT id, languages, path FROM fonts WHERE sha256=?',(digest,)).fetchone()
                     if exists:
-                        # Backfill language coverage for records created by an older version.
+                        # A matching SHA-256 proves the file is identical. Repair stale
+                        # absolute paths when the file is found in the portable library.
+                        updates=[]; values=[]
+                        if is_within_directory(src, LIBRARY_DIR):
+                            updates.extend(['path=?', 'source_path=?', 'missing=0'])
+                            values.extend([str(src), str(src)])
                         if not exists['languages'] or exists['languages'] == '[]':
                             try:
                                 _, _, _, languages = font_metadata(src)
-                                with self.db.lock, self.db.conn:
-                                    self.db.conn.execute('UPDATE fonts SET languages=? WHERE id=?',(json.dumps(languages),exists['id']))
+                                updates.append('languages=?'); values.append(json.dumps(languages))
                             except Exception: pass
+                        if updates:
+                            with self.db.lock, self.db.conn:
+                                self.db.conn.execute('UPDATE fonts SET '+', '.join(updates)+' WHERE id=?', (*values, exists['id']))
                         duplicates+=1; progress(i,max(total,1),f'קובץ {i:,} מתוך {total:,} — כפילות'); continue
                     family,subfamily,weight,languages=font_metadata(src)
                     dest_name=f'{safe_name(family)} - {safe_name(subfamily)}-{digest[:10]}{src.suffix.lower()}'
                     dest=LIBRARY_DIR/dest_name
-                    # Don't copy a file into itself; external files are copied, source stays unchanged.
-                    try: is_managed = src.resolve().parent == LIBRARY_DIR.resolve()
-                    except OSError: is_managed = False
-                    if is_managed:
-                        # Normalize names in our own library only; never rename external source files.
-                        if src.resolve()!=dest.resolve() and not dest.exists():
-                            try: src.rename(dest)
-                            except OSError: dest=src
-                        elif dest.exists() and src.resolve()!=dest.resolve():
-                            dest=src
+                    # Never rename files already in the managed library during a scan.
+                    if is_within_directory(src, LIBRARY_DIR):
+                        dest=src
                     elif src.resolve()!=dest.resolve():
-                        if dest.exists(): dest=LIBRARY_DIR/f'{safe_name(family)} - {safe_name(subfamily)}-{digest[:16]}{src.suffix.lower()}'
+                        if dest.exists():
+                            try:
+                                if file_hash(dest)!=digest:
+                                    dest=LIBRARY_DIR/f'{safe_name(family)} - {safe_name(subfamily)}-{digest[:16]}{src.suffix.lower()}'
+                            except OSError:
+                                dest=LIBRARY_DIR/f'{safe_name(family)} - {safe_name(subfamily)}-{digest[:16]}{src.suffix.lower()}'
                         if not dest.exists(): shutil.copy2(src,dest)
                     else: dest=src
                     with self.db.lock, self.db.conn:
-                        self.db.conn.execute('INSERT OR IGNORE INTO fonts(family,subfamily,weight,path,source_path,size,sha256,added_at,languages) VALUES(?,?,?,?,?,?,?,?,?)',
+                        self.db.conn.execute('INSERT OR IGNORE INTO fonts(family,subfamily,weight,path,source_path,size,sha256,added_at,languages,missing) VALUES(?,?,?,?,?,?,?,?,?,0)',
                             (family,subfamily,weight,str(dest),str(src),size,digest,time.time(),json.dumps(languages)))
                     imported+=1
                 except Exception as e:
                     skipped+=1
                 if i%10==0 or i==total: progress(i,max(total,1),f'נבדקו {i:,} מתוך {total:,}')
-            return {'found':total,'imported':imported,'duplicates':duplicates,'skipped':skipped,'cancelled':self.cancel_event.is_set(),'initial':initial}
+            return {'found':total,'imported':imported,'duplicates':duplicates,'skipped':skipped,'cancelled':self.cancel_event.is_set(),'initial':initial,'automatic':automatic}
         worker=Worker(work); worker.signals.progress.connect(self.on_progress); worker.signals.done.connect(self.scan_done); worker.signals.error.connect(self.worker_error); self.pool.start(worker)
     def cancel_scan(self):
         self.cancel_event.set(); self.cancel_btn.setEnabled(False); self.statusBar().showMessage('הביטול יתבצע בצורה בטוחה לאחר סיום בדיקת הקובץ הנוכחי…')
@@ -419,6 +433,9 @@ class FontStudio(QMainWindow):
         self.set_busy(False); self.refresh()
         if result.get('initial'):
             self.settings['last_scan_done']=True; save_settings(self.settings)
+        if result.get('automatic'):
+            self.statusBar().showMessage(f"הספרייה עודכנה: {result['imported']:,} גופנים חדשים, {result['duplicates']:,} קיימים")
+            return
         msg=(f"נמצאו: {result['found']:,}\nנוספו: {result['imported']:,}\nכפילויות שדולגו: {result['duplicates']:,}\nקבצים שלא ניתן היה לייבא: {result['skipped']:,}")
         if result.get('cancelled'): msg+='\nהפעולה בוטלה.'
         QMessageBox.information(self,'סיכום סריקה',msg); self.statusBar().showMessage('הסריקה הסתיימה')
