@@ -1,12 +1,6 @@
 name: Build Font Studio for Windows
 on:
   workflow_dispatch:
-  push:
-    branches: [main, master]
-    paths:
-      - 'font_studio.py'
-      - 'requirements.txt'
-      - '.github/workflows/build-windows.yml'
 permissions:
   contents: read
 jobs:
