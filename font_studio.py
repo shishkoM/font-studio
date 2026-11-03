@@ -317,10 +317,26 @@ class FontStudio(QMainWindow):
     def __init__(self):
         super().__init__(); self.setWindowTitle('Font Studio'); self.setWindowIcon(QIcon(str(Path(getattr(sys, '_MEIPASS', ROOT)) / 'assets' / 'fontstudio.ico'))); self.resize(1180,850); self.setMinimumSize(900,600); self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.db=Database(); self.settings=load_settings(); self.pool=QThreadPool.globalInstance(); self.cancel_event=threading.Event(); self.busy=False
-        self.model=FontListModel(); self.init_ui(); self.apply_theme(); self.refresh()
-        # Re-scan the portable library on every launch to repair paths after moves.
-        self.statusBar().showMessage('בודק את ספריית הגופנים המקומית…')
+        self.model=FontListModel(); self._startup_worker=None
+        self.init_ui(); self.apply_theme()
+        # Keep the main window responsive: load the existing catalog in a worker,
+        # then reconcile the portable library in the background.
+        self.progress.setVisible(True); self.progress.setRange(0, 0)
+        self.statusBar().showMessage('טוען את רשימת הגופנים…')
+        QTimer.singleShot(0, self.load_initial_fonts)
         QTimer.singleShot(350, self.scan_default_locations)
+    def load_initial_fonts(self):
+        worker=Worker(lambda _progress: self.db.rows(
+            self.search.text().strip(), self.favorites.isChecked(), self.current_language()))
+        self._startup_worker=worker
+        worker.signals.done.connect(self.initial_fonts_loaded)
+        worker.signals.error.connect(self.worker_error)
+        self.pool.start(worker)
+    def initial_fonts_loaded(self, items):
+        self.model.replace(items)
+        self.progress.setVisible(False)
+        self.progress.setRange(0, 100)
+        self.statusBar().showMessage(f'נטענו {len(items):,} משפחות גופנים')
     def init_ui(self):
         central=QWidget(); self.setCentralWidget(central); root=QVBoxLayout(central); root.setContentsMargins(22,18,22,18); root.setSpacing(12)
         header=QHBoxLayout(); title=QLabel('Font Studio'); title.setObjectName('title'); header.addWidget(title); header.addStretch()
@@ -517,16 +533,10 @@ def main():
     icon_base = Path(getattr(sys, '_MEIPASS', ROOT))
     icon_path = icon_base / 'assets' / 'fontstudio.ico'
     if icon_path.exists(): app.setWindowIcon(QIcon(str(icon_path)))
-    # Show an immediate lightweight startup window before database and UI initialization.
-    splash = QWidget(); splash.setWindowTitle(APP_NAME); splash.setWindowIcon(QIcon(str(icon_path)))
-    splash.setFixedSize(360, 170); splash.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-    layout = QVBoxLayout(splash)
-    title = QLabel('Font Studio'); title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-    title.setStyleSheet('font-size:24px;font-weight:700;padding:8px;'); layout.addWidget(title)
-    spinner = QLabel('◌  טוען את ספריית הגופנים…'); spinner.setAlignment(Qt.AlignmentFlag.AlignCenter)
-    spinner.setStyleSheet('font-size:15px;padding:8px;'); layout.addWidget(spinner)
-    splash.show(); app.processEvents()
-    win = FontStudio(); win.show(); splash.close()
+    # Show the actual application window immediately. Catalog loading and
+    # library reconciliation continue asynchronously with visible progress.
+    win = FontStudio()
+    win.show()
     sys.exit(app.exec())
 
 if __name__=='__main__': main()
