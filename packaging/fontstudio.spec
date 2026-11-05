@@ -8,11 +8,14 @@ from PyInstaller.utils.hooks import collect_submodules
 
 block_cipher = None
 
+# Resolve all build inputs relative to this spec file, not the process working directory.
+project_root = Path(SPECPATH).resolve().parent.parent
+
 a = Analysis(
-    ["font_studio.py"],
-    pathex=[],
+    [str(project_root / "font_studio.py")],
+    pathex=[str(project_root)],
     binaries=[],
-    datas=[("assets/fontstudio.ico", "assets")],
+    datas=[(str(project_root / "assets" / "fontstudio.ico"), "assets")],
     hiddenimports=(
         collect_submodules("fontTools.ttLib")
         + collect_submodules("fontTools.cffLib")
@@ -91,5 +94,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=["assets/fontstudio.ico"],
+    icon=[str(project_root / "assets" / "fontstudio.ico")],
 )
