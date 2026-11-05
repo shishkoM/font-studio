@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from PySide6.QtCore import Qt, QAbstractListModel, QModelIndex, QObject, Signal, QRunnable, QThreadPool, QSize, QSortFilterProxyModel
-from PySide6.QtGui import QFont, QFontDatabase, QPainter, QColor, QPen, QFontMetrics, QIcon
+from PySide6.QtGui import QFont, QFontDatabase, QPainter, QColor, QPen, QFontMetrics, QIcon, QCursor
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QComboBox, QSlider, QCheckBox, QListView, QProgressBar, QFileDialog, QMessageBox,
     QDialog, QTextEdit, QSpinBox, QDialogButtonBox, QFrame, QMenu, QSplitter, QToolButton, QStatusBar, QStyle, QColorDialog)
@@ -333,7 +333,7 @@ class FontListModel(QAbstractListModel):
         item=self.items[index.row()]
         if role == self.FamilyRole: return item
         if role == Qt.ItemDataRole.DisplayRole: return item['family']
-        if role == Qt.ItemDataRole.SizeHintRole: return QSize(700, 128)
+        if role == Qt.ItemDataRole.SizeHintRole: return QSize(700, 88)
         return None
     def replace(self, items):
         self.beginResetModel(); self.items=items; self.endResetModel()
@@ -363,66 +363,113 @@ class FamilyDelegate(QStyledItemDelegate):
         return QFont(item.get('family','Segoe UI'))
     def paint(self, painter, option, index):
         item=index.data(FontListModel.FamilyRole) or {}
-        painter.save(); rect=option.rect.adjusted(7,5,-7,-5)
+        painter.save()
+        rect=option.rect.adjusted(8,3,-8,-3)
+        dark=self.owner.settings.get('theme')=='כהה'
+        selected=bool(option.state & QStyle.StateFlag.State_Selected)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(QPen(QColor('#e3def7'))); painter.setBrush(QColor('#f7f5ff' if option.state & QStyle.StateFlag.State_Selected else '#ffffff'))
-        painter.drawRoundedRect(rect,12,12)
-        right=rect.right()-18; y=rect.top()+24
-        painter.setPen(QColor('#27223b')); painter.setFont(QFont('Segoe UI', 13, QFont.Weight.DemiBold))
-        painter.drawText(right-500,y,500,24,Qt.AlignmentFlag.AlignRight|Qt.AlignmentFlag.AlignVCenter,item.get('family',''))
-        painter.setFont(QFont('Segoe UI', 9)); painter.setPen(QColor('#77718a'))
-        weights=', '.join((item.get('weights') or '').split(','))
-        painter.drawText(right-650,y+25,650,20,Qt.AlignmentFlag.AlignRight|Qt.AlignmentFlag.AlignVCenter, f"{item.get('count',0)} סגנונות  •  {weights[:110]}")
-        lang=self.owner.current_language()
-        custom_text = self.owner.preview_text.text().strip() if hasattr(self.owner, 'preview_text') else ''
-        sample = custom_text or ((SAMPLE_ALPHABET if self.owner.settings.get('sample_mode')=='אלפבית' else SAMPLE_SENTENCE) if lang in ('all','he') else LANGUAGE_SAMPLES.get(lang, SAMPLE_SENTENCE))
-        font=self.font_for_item(item); font.setPointSize(int(self.owner.settings.get('preview_size',28)))
-        painter.setFont(font); painter.setPen(QColor(self.owner.settings.get('preview_color','#4e3a98'))) 
-        sample_rect=rect.adjusted(18,55,-300,-8)
-        # Keep every font preview on one line; shorten only the displayed text when it
-        # does not fit instead of allowing the sample to wrap into a second line.
-        preview_sample=QFontMetrics(font).elidedText(
-            sample, Qt.TextElideMode.ElideLeft, sample_rect.width()
-        )
-        painter.drawText(
-            sample_rect,
-            Qt.AlignmentFlag.AlignVCenter|Qt.AlignmentFlag.AlignRight|Qt.TextFlag.TextSingleLine,
-            preview_sample
-        )
-        # Clickable action chips are painted by the delegate, avoiding thousands of QWidget controls.
-        actions=[('התנסות', 'try'), ('התקנה', 'install'), ('☆' if not item.get('favorite') else '★', 'favorite')]
-        x=rect.right()-112
+
+        bg=QColor('#2b2638' if dark else '#ffffff')
+        if selected: bg=QColor('#38304d' if dark else '#f0edfb')
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(bg)
+        painter.drawRoundedRect(rect,9,9)
+
+        primary=QColor('#f3f0fb' if dark else '#252238')
+        muted=QColor('#aaa3bd' if dark else '#77718a')
+        accent=QColor('#b9a8ff' if dark else '#6045d8')
+        border=QColor('#494257' if dark else '#e6e1ef')
+
+        # Keep metadata narrow so the user's sample text gets most of the row.
+        right=rect.right()-14
+        meta_left=right-132
+        painter.setPen(primary)
+        painter.setFont(QFont('Segoe UI',11,QFont.Weight.DemiBold))
+        family_text=QFontMetrics(painter.font()).elidedText(item.get('family',''),Qt.TextElideMode.ElideLeft,132)
+        painter.drawText(meta_left,rect.top()+10,132,24,
+                         Qt.AlignmentFlag.AlignRight|Qt.AlignmentFlag.AlignVCenter,
+                         family_text)
+        painter.setPen(muted)
+        painter.setFont(QFont('Segoe UI',8))
+        weights=(item.get('weights') or '').strip()
+        painter.drawText(meta_left,rect.top()+34,132,18,
+                         Qt.AlignmentFlag.AlignRight|Qt.AlignmentFlag.AlignVCenter,
+                         f"{item.get('count',0)} סגנונות  •  {weights[:30]}")
+        status='חסר קובץ' if item.get('missing') else ('מותקן' if item.get('installed') else 'לא מותקן')
+        status_color=QColor('#e18a70' if item.get('missing') else ('#4bb58e' if item.get('installed') else muted))
+        painter.setPen(status_color)
         painter.setFont(QFont('Segoe UI',8,QFont.Weight.DemiBold))
-        for label, key in actions:
-            w=76 if key!='favorite' else 30
-            button_rect=__import__('PySide6.QtCore',fromlist=['QRect']).QRect(x-w+1,rect.top()+72,w,28)
-            painter.setPen(QPen(QColor('#d8cffb'))); painter.setBrush(QColor('#eee9ff'))
-            painter.drawRoundedRect(button_rect,7,7)
-            painter.setPen(QColor('#5c3bd6')); painter.drawText(button_rect,Qt.AlignmentFlag.AlignCenter,label)
-            x-=w+5
-        painter.setPen(QColor('#6d4aff')); painter.setFont(QFont('Segoe UI',9,QFont.Weight.DemiBold))
-        painter.drawText(rect.left()+14,rect.top()+24,150,20,Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter,'★' if item.get('favorite') else '☆')
-        painter.setPen(QColor('#8c859f')); painter.setFont(QFont('Segoe UI',8))
-        status = 'חסר קובץ' if item.get('missing') else ('מותקן' if item.get('installed') else 'לא מותקן')
-        painter.drawText(rect.left()+14,rect.top()+48,160,20,Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter,status)
+        painter.drawText(meta_left,rect.top()+54,132,17,
+                         Qt.AlignmentFlag.AlignRight|Qt.AlignmentFlag.AlignVCenter,status)
+
+        lang=self.owner.current_language()
+        custom_text=self.owner.preview_text.text().strip() if hasattr(self.owner,'preview_text') else ''
+        sample=custom_text or ((SAMPLE_ALPHABET if self.owner.settings.get('sample_mode')=='אלפבית' else SAMPLE_SENTENCE)
+                               if lang in ('all','he') else LANGUAGE_SAMPLES.get(lang,SAMPLE_SENTENCE))
+        font=self.font_for_item(item)
+        font.setPointSize(int(self.owner.settings.get('preview_size',28)))
+        preview_rect=rect.adjusted(198,7,-130,-7)
+        preview_sample=QFontMetrics(font).elidedText(sample,Qt.TextElideMode.ElideLeft,preview_rect.width())
+        painter.setFont(font)
+        painter.setPen(QColor(self.owner.settings.get('preview_color','#4e3a98')))
+        painter.drawText(preview_rect,Qt.AlignmentFlag.AlignVCenter|Qt.AlignmentFlag.AlignRight|Qt.TextFlag.TextSingleLine,preview_sample)
+
+        # Purposeful action hierarchy: subtle preview, prominent install, quiet favorite.
+        from PySide6.QtCore import QRect
+        actions=[('התנסות','try',68),('מותקן' if item.get('installed') else 'התקנה','install',72),('★' if item.get('favorite') else '☆','favorite',28)]
+        x=rect.left()+12
+        y=rect.top()+27
+        cursor_pos=self.owner.list.viewport().mapFromGlobal(QCursor.pos()) if hasattr(self.owner,'list') else None
+        for label,key,w in actions:
+            button_rect=QRect(x,y,w,34)
+            hovered=key in ('try','install') and cursor_pos is not None and button_rect.contains(cursor_pos)
+            draw_rect=button_rect.adjusted(-2,-2,2,2) if hovered else button_rect
+            if key=='install':
+                painter.setPen(Qt.PenStyle.NoPen)
+                if item.get('installed'):
+                    fill=QColor('#cce9dc' if hovered else '#e5f3ed') if not dark else QColor('#426d5d' if hovered else '#315f50')
+                    text_color=QColor('#1d6849' if not dark else '#c5f0dc')
+                else:
+                    fill=QColor('#765be8' if dark else '#654bd1')
+                    if hovered: fill=QColor('#8b74f0' if dark else '#765fe0')
+                    text_color=QColor('#ffffff')
+                painter.setBrush(fill)
+                painter.drawRoundedRect(draw_rect,8,8)
+                painter.setPen(text_color)
+            else:
+                painter.setPen(QPen(accent if hovered else border, 1.5 if hovered else 1))
+                painter.setBrush(QColor('#eee9ff' if hovered and not dark else '#42375a' if hovered else '#332d42' if dark else '#faf9fc'))
+                painter.drawRoundedRect(draw_rect,8,8)
+                painter.setPen(accent if not dark or hovered else QColor('#d0c4ff'))
+            painter.setFont(QFont('Segoe UI',9 if hovered else 8,QFont.Weight.DemiBold))
+            painter.drawText(draw_rect,Qt.AlignmentFlag.AlignCenter,label)
+            x+=w+5
         painter.restore()
+
     def editorEvent(self, event, model, option, index):
         from PySide6.QtCore import QEvent, QRect
-        if event.type() != QEvent.Type.MouseButtonRelease or event.button() != Qt.MouseButton.LeftButton:
+        if event.type()!=QEvent.Type.MouseButtonRelease or event.button()!=Qt.MouseButton.LeftButton:
             return False
         item=index.data(FontListModel.FamilyRole) or {}
-        rect=option.rect.adjusted(7,5,-7,-5); x=rect.right()-112; y=rect.top()+72
-        for label, key in [('התנסות','try'),('התקנה','install'),('☆','favorite')]:
-            w=76 if key!='favorite' else 30
-            hit=QRect(x-w+1,y,w,28)
-            if hit.contains(event.position().toPoint()):
-                if key=='try': self.owner.try_family(item.get('family',''))
-                elif key=='install': self.owner.install_family(item.get('family',''))
-                else: self.owner.db.toggle_favorite(item.get('family','')); self.owner.refresh()
+        rect=option.rect.adjusted(8,3,-8,-3)
+        x=rect.left()+12
+        y=rect.top()+27
+        for key,w in [('try',68),('install',72),('favorite',28)]:
+            if QRect(x,y,w,34).contains(event.position().toPoint()):
+                family=item.get('family','')
+                if key=='try':
+                    self.owner.try_family(family)
+                elif key=='install':
+                    if not item.get('installed'):
+                        self.owner.install_family(family)
+                else:
+                    self.owner.db.toggle_favorite(family)
+                    self.owner.refresh()
                 return True
-            x-=w+5
+            x+=w+5
         return False
-    def sizeHint(self, option, index): return QSize(700, 128)
+
+    def sizeHint(self, option, index): return QSize(700, 92)
 
 class TryDialog(QDialog):
     """Live preview: the editable text itself uses the selected font and preview color."""
@@ -488,28 +535,155 @@ class FontStudio(QMainWindow):
         # Start maintenance only after the window is visible and the catalog is ready.
         QTimer.singleShot(0, self.scan_default_locations)
     def init_ui(self):
-        central=QWidget(); self.setCentralWidget(central); root=QVBoxLayout(central); root.setContentsMargins(22,18,22,18); root.setSpacing(12)
-        header=QHBoxLayout(); title=QLabel('Font Studio'); title.setObjectName('title'); header.addWidget(title); header.addStretch()
-        self.theme=QComboBox(); self.theme.addItems(['בהירה','כהה']); self.theme.setCurrentText(self.settings.get('theme','בהירה')); self.theme.currentTextChanged.connect(self.change_theme); header.addWidget(QLabel('ערכת נושא')); header.addWidget(self.theme); self.color_btn=QPushButton('צבע התצוגה'); self.color_btn.clicked.connect(self.choose_preview_color); header.addWidget(self.color_btn); root.addLayout(header)
-        subtitle=QLabel('ספריית הגופנים שלך — חיפוש, תצוגה, השוואה והתקנה'); subtitle.setObjectName('subtitle'); root.addWidget(subtitle)
-        controls=QHBoxLayout(); self.search=QLineEdit(); self.search.setPlaceholderText('חיפוש לפי משפחת גופן או משקל…'); self.search.setClearButtonEnabled(True); self.search.textChanged.connect(self.refresh); controls.addWidget(self.search,1)
-        self.favorites=QCheckBox('מועדפים בלבד'); self.favorites.toggled.connect(self.refresh); controls.addWidget(self.favorites)
-        self.language=QComboBox(); self.language.setToolTip('הצג רק גופנים שתומכים בכתב של השפה שנבחרה')
-        for code,label in LANGUAGE_LABELS: self.language.addItem(label,code)
-        self.language.setCurrentIndex(max(0,self.language.findData(self.settings.get('language','all')))); self.language.currentIndexChanged.connect(self.change_language); controls.addWidget(self.language)
-        self.scan_btn=QPushButton('סריקה / ייבוא תיקייה'); self.scan_btn.clicked.connect(self.choose_folder); controls.addWidget(self.scan_btn)
-        self.cancel_btn=QPushButton('ביטול סריקה'); self.cancel_btn.setVisible(False); self.cancel_btn.clicked.connect(self.cancel_scan); controls.addWidget(self.cancel_btn)
-        self.compare_btn=QPushButton('השוואת גופנים'); self.compare_btn.clicked.connect(self.compare_selected); controls.addWidget(self.compare_btn); root.addLayout(controls)
-        preview=QHBoxLayout(); preview.addWidget(QLabel('גודל תצוגה')); self.preview_slider=QSlider(Qt.Orientation.Horizontal); self.preview_slider.setRange(14,64); self.preview_slider.setValue(int(self.settings.get('preview_size',28))); self.preview_slider.valueChanged.connect(self.change_preview_size); preview.addWidget(self.preview_slider,1); self.size_label=QLabel(str(self.preview_slider.value())); preview.addWidget(self.size_label)
-        preview.addWidget(QLabel('טקסט לתצוגה בכל הגופנים')); self.preview_text=QLineEdit(); self.preview_text.setText(self.settings.get('preview_text','')); self.preview_text.setPlaceholderText('הקלד מילה או משפט — יוצג בכל הגופנים ברשימה'); self.preview_text.setClearButtonEnabled(True); self.preview_text.textChanged.connect(self.change_preview_text); preview.addWidget(self.preview_text,2); self.sample_mode=QComboBox(); self.sample_mode.addItems(['משפט','אלפבית']); self.sample_mode.setCurrentText(self.settings.get('sample_mode','משפט')); self.sample_mode.currentTextChanged.connect(self.change_sample); preview.addWidget(self.sample_mode); root.addLayout(preview)
-        self.list=QListView(); self.list.setModel(self.model); self.list.setItemDelegate(FamilyDelegate(self)); self.list.setUniformItemSizes(True); self.list.setSpacing(2); self.list.setSelectionMode(QListView.SelectionMode.ExtendedSelection); self.list.doubleClicked.connect(self.try_selected); self.list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu); self.list.customContextMenuRequested.connect(self.context_menu); root.addWidget(self.list,1)
-        self.progress=QProgressBar(); self.progress.setVisible(False); self.progress.setTextVisible(True); root.addWidget(self.progress)
-        self.statusBar().showMessage('מוכן'); self.statusBar().setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        central=QWidget()
+        central.setObjectName('appRoot')
+        self.setCentralWidget(central)
+        shell=QHBoxLayout(central)
+        shell.setContentsMargins(0,0,0,0)
+        shell.setSpacing(0)
+
+        # Main content uses the full window width; navigation stays in the toolbar controls.
+        content=QWidget()
+        content.setObjectName('content')
+        root=QVBoxLayout(content)
+        root.setContentsMargins(28,24,28,18)
+        root.setSpacing(14)
+
+        header=QHBoxLayout()
+        heading=QVBoxLayout()
+        title=QLabel('ספריית הגופנים')
+        title.setObjectName('title')
+        heading.addWidget(title)
+        subtitle=QLabel('חפש, השווה והצג תצוגה מקדימה של הגופנים שלך')
+        subtitle.setObjectName('subtitle')
+        heading.addWidget(subtitle)
+        header.addLayout(heading)
+        header.addStretch()
+        self.theme=QComboBox()
+        self.theme.addItems(['בהירה','כהה'])
+        self.theme.setCurrentText(self.settings.get('theme','בהירה'))
+        self.theme.currentTextChanged.connect(self.change_theme)
+        header.addWidget(QLabel('ערכת נושא'))
+        header.addWidget(self.theme)
+        self.color_btn=QPushButton('צבע התצוגה')
+        self.color_btn.clicked.connect(self.choose_preview_color)
+        header.addWidget(self.color_btn)
+        root.addLayout(header)
+
+        controls=QHBoxLayout()
+        self.search=QLineEdit()
+        self.search.setPlaceholderText('חיפוש לפי שם גופן או משקל…')
+        self.search.setClearButtonEnabled(True)
+        self.search.textChanged.connect(self.refresh)
+        controls.addWidget(self.search,1)
+        self.favorites=QCheckBox('מועדפים בלבד')
+        self.favorites.toggled.connect(self.refresh)
+        controls.addWidget(self.favorites)
+        self.language=QComboBox()
+        self.language.setToolTip('הצג רק גופנים שתומכים בכתב של השפה שנבחרה')
+        for code,label in LANGUAGE_LABELS:
+            self.language.addItem(label,code)
+        self.language.setCurrentIndex(max(0,self.language.findData(self.settings.get('language','all'))))
+        self.language.currentIndexChanged.connect(self.change_language)
+        controls.addWidget(self.language)
+        self.scan_btn=QPushButton('＋ ייבוא גופנים')
+        self.scan_btn.clicked.connect(self.choose_folder)
+        controls.addWidget(self.scan_btn)
+        self.cancel_btn=QPushButton('ביטול סריקה')
+        self.cancel_btn.setVisible(False)
+        self.cancel_btn.clicked.connect(self.cancel_scan)
+        controls.addWidget(self.cancel_btn)
+        self.compare_btn=QPushButton('השוואה')
+        self.compare_btn.clicked.connect(self.compare_selected)
+        controls.addWidget(self.compare_btn)
+        root.addLayout(controls)
+
+        preview=QHBoxLayout()
+        preview_title=QLabel('תצוגה מקדימה')
+        preview_title.setObjectName('sectionLabel')
+        preview.addWidget(preview_title)
+        self.preview_text=QLineEdit()
+        self.preview_text.setText(self.settings.get('preview_text',''))
+        self.preview_text.setPlaceholderText('הקלד מילה או משפט שיופיעו בכל שורות הגופנים')
+        self.preview_text.setClearButtonEnabled(True)
+        self.preview_text.textChanged.connect(self.change_preview_text)
+        preview.addWidget(self.preview_text,1)
+        preview.addWidget(QLabel('גודל'))
+        self.preview_slider=QSlider(Qt.Orientation.Horizontal)
+        self.preview_slider.setRange(14,64)
+        self.preview_slider.setFixedWidth(115)
+        self.preview_slider.setValue(int(self.settings.get('preview_size',28)))
+        self.preview_slider.valueChanged.connect(self.change_preview_size)
+        preview.addWidget(self.preview_slider)
+        self.size_label=QLabel(str(self.preview_slider.value()))
+        self.size_label.setObjectName('sizeLabel')
+        preview.addWidget(self.size_label)
+        self.sample_mode=QComboBox()
+        self.sample_mode.addItems(['משפט','אלפבית'])
+        self.sample_mode.setCurrentText(self.settings.get('sample_mode','משפט'))
+        self.sample_mode.currentTextChanged.connect(self.change_sample)
+        preview.addWidget(self.sample_mode)
+        root.addLayout(preview)
+
+        self.list=QListView()
+        self.list.setObjectName('fontList')
+        self.list.setModel(self.model)
+        self.list.setItemDelegate(FamilyDelegate(self))
+        self.list.setUniformItemSizes(True)
+        self.list.setMouseTracking(True)
+        self.list.viewport().setMouseTracking(True)
+        self.list.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        self.list.setSpacing(1)
+        self.list.setSelectionMode(QListView.SelectionMode.ExtendedSelection)
+        self.list.doubleClicked.connect(self.try_selected)
+        self.list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.list.customContextMenuRequested.connect(self.context_menu)
+        root.addWidget(self.list,1)
+
+        self.progress=QProgressBar()
+        self.progress.setVisible(False)
+        self.progress.setTextVisible(True)
+        root.addWidget(self.progress)
+        self.statusBar().showMessage('מוכן')
+        self.statusBar().setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        shell.addWidget(content,1)
+
     def apply_theme(self):
         if self.settings.get('theme')=='כהה':
-            self.setStyleSheet("QMainWindow,QWidget {background:#191722;color:#f3f0fb;} QLineEdit,QComboBox,QTextEdit,QSpinBox,QListView {background:#242130;border:1px solid #49425f;border-radius:8px;padding:7px;color:#f3f0fb;} QPushButton {background:#6d4aff;color:white;border:0;border-radius:9px;padding:9px 13px;} QPushButton:hover {background:#8064ff;} QLabel#title {font-size:28px;font-weight:700;color:#c7b8ff;} QLabel#subtitle {color:#b8b0cc;} QProgressBar {border:1px solid #49425f;border-radius:6px;text-align:center;} QProgressBar::chunk {background:#6d4aff;}")
+            self.setStyleSheet("""
+                QMainWindow { background:#17151f; }
+                QWidget#appRoot,QWidget#content { background:#17151f; color:#f2effa; }
+                QLabel#brand { color:#c9bbff; font-size:22px; font-weight:700; }
+                QPushButton#navButton { text-align:right; background:transparent; color:#c8c1d5; border:0; padding:11px 12px; border-radius:7px; }
+                QPushButton#navButton:checked { background:#39304f; color:#d8ccff; font-weight:600; }
+                QLabel#title { font-size:25px; font-weight:700; color:#f2effa; }
+                QLabel#subtitle,QLabel#sectionLabel { color:#a9a1b9; }
+                QLineEdit,QComboBox,QTextEdit,QSpinBox { background:#242130; border:1px solid #40394f; border-radius:7px; padding:8px; color:#f3f0fb; }
+                QPushButton { background:#765be8; color:white; border:0; border-radius:7px; padding:9px 13px; }
+                QPushButton:hover { background:#8b74f0; }
+                QListView#fontList { background:#17151f; border:0; outline:0; }
+                QProgressBar { border:1px solid #40394f; border-radius:6px; text-align:center; background:#242130; color:#f3f0fb; }
+                QProgressBar::chunk { background:#765be8; }
+                QStatusBar { background:#211d2b; color:#aaa2b9; }
+            """)
         else:
-            self.setStyleSheet("QMainWindow,QWidget {background:#f4f2f9;color:#27223b;} QLineEdit,QComboBox,QTextEdit,QSpinBox,QListView {background:white;border:1px solid #e2deed;border-radius:8px;padding:7px;color:#27223b;} QPushButton {background:#6d4aff;color:white;border:0;border-radius:9px;padding:9px 13px;} QPushButton:hover {background:#8064ff;} QLabel#title {font-size:28px;font-weight:700;color:#5c3bd6;} QLabel#subtitle {color:#77718a;} QProgressBar {border:1px solid #e2deed;border-radius:6px;text-align:center;background:white;} QProgressBar::chunk {background:#6d4aff;}")
+            self.setStyleSheet("""
+                QMainWindow { background:#f5f4f8; }
+                QWidget#appRoot,QWidget#content { background:#f5f4f8; color:#292638; }
+                QLabel#brand { color:#5e45c7; font-size:22px; font-weight:700; }
+                QPushButton#navButton { text-align:right; background:transparent; color:#5f5a6b; border:0; padding:11px 12px; border-radius:7px; }
+                QPushButton#navButton:checked { background:#f0edfb; color:#5e45c7; font-weight:600; }
+                QLabel#title { font-size:25px; font-weight:700; color:#292638; }
+                QLabel#subtitle,QLabel#sectionLabel { color:#777181; }
+                QLineEdit,QComboBox,QTextEdit,QSpinBox { background:#ffffff; border:1px solid #e4e1eb; border-radius:7px; padding:8px; color:#292638; }
+                QPushButton { background:#654bd1; color:white; border:0; border-radius:7px; padding:9px 13px; }
+                QPushButton:hover { background:#765fe0; }
+                QListView#fontList { background:#f5f4f8; border:0; outline:0; }
+                QProgressBar { border:1px solid #e4e1eb; border-radius:6px; text-align:center; background:#ffffff; }
+                QProgressBar::chunk { background:#654bd1; }
+                QStatusBar { background:#ffffff; color:#777181; }
+            """)
+
     def change_theme(self, value): self.settings['theme']=value; save_settings(self.settings); self.apply_theme(); self.refresh()
     def choose_preview_color(self):
         color=QColorDialog.getColor(QColor(self.settings.get('preview_color','#4e3a98')),self,'בחר צבע תצוגה')
