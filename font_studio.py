@@ -94,30 +94,123 @@ def is_within_directory(path: Path, directory: Path) -> bool:
     except (OSError, ValueError):
         return False
 
+def _font_face_metadata(font, path: Path):
+    """Read one face from a standalone font or a TrueType/OpenType collection."""
+    names = font['name']
+    def name(ids):
+        for nid in ids:
+            try:
+                value = names.getDebugName(nid)
+                if value and value.strip(): return value.strip()
+            except Exception: pass
+        return ''
+    family = name([16, 1]) or name([1]) or path.stem
+    subfamily = name([17, 2]) or name([2]) or 'Regular'
+    weight_class = None
+    try: weight_class = int(font['OS/2'].usWeightClass)
+    except Exception: pass
+    weight = subfamily if weight_class is None else f'{subfamily} ({weight_class})'
+    return family, subfamily, weight, font_languages(font)
+
+
 def font_metadata(path: Path):
+    """Return metadata for every face in a font file, including TTC/OTC collections."""
     try:
+        if path.suffix.lower() in {'.ttc', '.otc'}:
+            from fontTools.ttLib import TTCollection
+            collection = TTCollection(str(path), lazy=True)
+            try:
+                if not collection.fonts:
+                    raise ValueError('אוסף הגופנים ריק')
+                return [(*_font_face_metadata(font, path), index)
+                        for index, font in enumerate(collection.fonts)]
+            finally:
+                collection.close()
         from fontTools.ttLib import TTFont
         font = TTFont(str(path), lazy=True, recalcBBoxes=False, recalcTimestamp=False)
         try:
-            names = font['name']
-            def name(ids):
-                for nid in ids:
-                    try:
-                        value = names.getDebugName(nid)
-                        if value and value.strip(): return value.strip()
-                    except Exception: pass
-                return ''
-            family = name([16, 1]) or path.stem
-            subfamily = name([17, 2]) or 'Regular'
-            weight_class = None
-            try: weight_class = int(font['OS/2'].usWeightClass)
-            except Exception: pass
-            weight = subfamily if weight_class is None else f'{subfamily} ({weight_class})'
-            languages = font_languages(font)
-            return family, subfamily, weight, languages
-        finally: font.close()
+            return [(*_font_face_metadata(font, path), 0)]
+        finally:
+            font.close()
     except Exception as e:
         raise ValueError(str(e)) from e
+
+
+def extract_collection_faces(src: Path, source_digest: str, faces):
+    """Extract each TTC/OTC face into a cached, independently loadable TTF/OTF."""
+    from fontTools.ttLib import TTCollection, TTFont
+
+    output_dir = DATA_DIR / 'ExtractedFonts' / source_digest
+    output_dir.mkdir(parents=True, exist_ok=True)
+    results = []
+    created = []
+    collection = TTCollection(str(src), lazy=False)
+
+    def valid_file(path, family, expected_outline):
+        try:
+            if not path.is_file() or path.stat().st_size == 0:
+                return False
+            check = TTFont(str(path), lazy=False, recalcBBoxes=False, recalcTimestamp=False)
+            try:
+                actual_family = _font_face_metadata(check, path)[0]
+                has_outline = expected_outline in check
+                return actual_family.casefold() == family.casefold() and has_outline
+            finally:
+                check.close()
+        except Exception:
+            return False
+
+    try:
+        if len(collection.fonts) != len(faces):
+            raise ValueError('מספר פני הגופן השתנה בין שלבי הקריאה')
+        for index, (family, subfamily, weight, languages, face_index) in enumerate(faces):
+            if face_index != index:
+                raise ValueError('אינדקס פני גופן לא תואם')
+            font = collection.fonts[index]
+            # CFF/CFF2 outlines are OpenType; glyf outlines are TrueType.
+            outline = 'CFF2' if 'CFF2' in font else ('CFF ' if 'CFF ' in font else 'glyf')
+            suffix = '.otf' if outline in {'CFF ', 'CFF2'} else '.ttf'
+            filename = f'face-{index:03d}-{safe_name(family)}{suffix}'
+            dest = output_dir / filename
+            temp = output_dir / f'.{filename}.tmp{suffix}'
+
+            if not valid_file(dest, family, outline):
+                try:
+                    temp.unlink(missing_ok=True)
+                    font.save(str(temp))
+                    if not valid_file(temp, family, outline):
+                        raise ValueError(f'קובץ הגופן שחולץ אינו תקין: {family}')
+                    temp.replace(dest)
+                    created.append(dest)
+                finally:
+                    temp.unlink(missing_ok=True)
+            results.append((family, subfamily, weight, languages, face_index,
+                            dest, file_hash(dest)))
+
+        # Never associate extracted faces with a source that changed mid-extraction.
+        if file_hash(src) != source_digest:
+            raise ValueError('קובץ המקור השתנה במהלך חילוץ הגופנים')
+    except Exception:
+        for path in created:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        raise
+    finally:
+        collection.close()
+    return results
+
+def font_family_from_file(path: str, requested_family: str, cache: dict):
+    """Register a font file once and select the requested family from collections."""
+    if not path or not Path(path).is_file():
+        return requested_family
+    if path not in cache:
+        cache[path] = QFontDatabase.addApplicationFont(path)
+    font_id = cache[path]
+    families = QFontDatabase.applicationFontFamilies(font_id) if font_id >= 0 else []
+    return next((name for name in families if name.casefold() == requested_family.casefold()),
+                families[0] if families else requested_family)
 
 class Database:
     def __init__(self):
@@ -221,7 +314,7 @@ class FamilyDelegate(QStyledItemDelegate):
             fid=self._font_ids[path]
             families=QFontDatabase.applicationFontFamilies(fid) if fid >= 0 else []
             if families:
-                font = QFont(families[0])
+                font = QFont(next((name for name in families if name.casefold() == item.get('family','').casefold()), families[0]))
                 # Match the exact face represented by the selected database path.
                 # This keeps previews stable when a relocated library is re-registered.
                 style = str(item.get('preview_subfamily', '')).split(' (', 1)[0].strip()
@@ -290,7 +383,7 @@ class TryDialog(QDialog):
         layout=QVBoxLayout(self)
         top=QHBoxLayout(); top.addWidget(QLabel('משקל:'))
         self.weight=QComboBox(); self.fonts=fonts
-        for f in fonts: self.weight.addItem(f['subfamily'], f['path'])
+        for f in fonts: self.weight.addItem(f['subfamily'], (f['path'], f['family']))
         top.addWidget(self.weight,2); top.addWidget(QLabel('גודל:'))
         self.size=QSpinBox(); self.size.setRange(8,160); self.size.setValue(int(parent.settings.get('preview_size',36)) if parent else 36); top.addWidget(self.size); layout.addLayout(top)
         self.text=QTextEdit(); self.text.setPlainText(SAMPLE_SENTENCE); self.text.setLayoutDirection(Qt.LayoutDirection.RightToLeft); self.text.setPlaceholderText('הקלד כאן — הטקסט יוצג ישירות בגופן הנבחר'); layout.addWidget(self.text,1)
@@ -300,12 +393,10 @@ class TryDialog(QDialog):
         from PySide6.QtCore import QTimer
         QTimer.singleShot(0, self.text.setFocus)
     def refresh(self):
-        path=self.weight.currentData(); fid=-1
-        if path and Path(path).is_file():
-            if path not in self._font_ids: self._font_ids[path]=QFontDatabase.addApplicationFont(path)
-            fid=self._font_ids[path]
-        families=QFontDatabase.applicationFontFamilies(fid) if fid >= 0 else []
-        font=QFont(families[0] if families else 'Segoe UI'); font.setPointSize(self.size.value())
+        selected_data=self.weight.currentData()
+        path, requested_family = selected_data if isinstance(selected_data, tuple) else (selected_data, family)
+        actual_family=font_family_from_file(path, requested_family, self._font_ids)
+        font=QFont(actual_family); font.setPointSize(self.size.value())
         # Qt's application font registration exposes the family; explicitly apply the selected face/style too.
         selected = self.weight.currentText().split(' (', 1)[0].strip()
         if selected and selected.lower() not in ('regular', 'normal', 'book'): font.setStyleName(selected)
@@ -424,46 +515,59 @@ class FontStudio(QMainWindow):
                 try:
                     size=src.stat().st_size
                     if not size: skipped+=1; continue
-                    digest=file_hash(src)
-                    with self.db.lock: exists=self.db.conn.execute('SELECT id, languages, path FROM fonts WHERE sha256=?',(digest,)).fetchone()
-                    if exists:
-                        # A matching SHA-256 proves the file is identical. Repair stale
-                        # absolute paths when the file is found in the portable library.
-                        updates=[]; values=[]
+                    file_digest=file_hash(src)
+                    faces=font_metadata(src)
+                    if not faces: skipped+=1; continue
+                    is_collection = src.suffix.lower() in {'.ttc', '.otc'}
+                    if is_collection:
+                        # Collections are never registered/copied as active font files.
+                        # Each face gets its own validated, cached standalone font file.
+                        face_records = extract_collection_faces(src, file_digest, faces)
+                    else:
+                        first_family, first_subfamily, _, _, _ = faces[0]
                         if is_within_directory(src, LIBRARY_DIR):
-                            updates.extend(['path=?', 'source_path=?', 'missing=0'])
-                            values.extend([str(src), str(src)])
-                        if not exists['languages'] or exists['languages'] == '[]':
-                            try:
-                                _, _, _, languages = font_metadata(src)
+                            dest = src
+                        else:
+                            dest_name = f'{safe_name(first_family)} - {safe_name(first_subfamily)}-{file_digest[:10]}{src.suffix.lower()}'
+                            dest = LIBRARY_DIR / dest_name
+                            if dest.exists():
+                                try:
+                                    if file_hash(dest) != file_digest:
+                                        dest = LIBRARY_DIR / f'{safe_name(first_family)} - {file_digest[:16]}{src.suffix.lower()}'
+                                except OSError:
+                                    dest = LIBRARY_DIR / f'{safe_name(first_family)} - {file_digest[:16]}{src.suffix.lower()}'
+                            if not dest.exists():
+                                shutil.copy2(src, dest)
+                        family, subfamily, weight, languages, face_index = faces[0]
+                        face_records = [(family, subfamily, weight, languages, face_index, dest, file_digest)]
+
+                    for family,subfamily,weight,languages,face_index,dest,face_digest in face_records:
+                        with self.db.lock:
+                            exists=self.db.conn.execute('SELECT id, languages FROM fonts WHERE sha256=?',(face_digest,)).fetchone()
+                        if exists:
+                            updates=[]; values=[]
+                            if is_collection:
+                                updates.extend(['path=?', 'source_path=?', 'missing=0'])
+                                values.extend([str(dest), str(src)])
+                            elif is_within_directory(src, LIBRARY_DIR):
+                                updates.extend(['path=?','source_path=?','missing=0'])
+                                values.extend([str(src),str(src)])
+                            if not exists['languages'] or exists['languages']=='[]':
                                 updates.append('languages=?'); values.append(json.dumps(languages))
-                            except Exception: pass
-                        if updates:
-                            with self.db.lock, self.db.conn:
-                                self.db.conn.execute('UPDATE fonts SET '+', '.join(updates)+' WHERE id=?', (*values, exists['id']))
-                        duplicates+=1; progress(i,max(total,1),f'קובץ {i:,} מתוך {total:,} — כפילות'); continue
-                    family,subfamily,weight,languages=font_metadata(src)
-                    dest_name=f'{safe_name(family)} - {safe_name(subfamily)}-{digest[:10]}{src.suffix.lower()}'
-                    dest=LIBRARY_DIR/dest_name
-                    # Never rename files already in the managed library during a scan.
-                    if is_within_directory(src, LIBRARY_DIR):
-                        dest=src
-                    elif src.resolve()!=dest.resolve():
-                        if dest.exists():
-                            try:
-                                if file_hash(dest)!=digest:
-                                    dest=LIBRARY_DIR/f'{safe_name(family)} - {safe_name(subfamily)}-{digest[:16]}{src.suffix.lower()}'
-                            except OSError:
-                                dest=LIBRARY_DIR/f'{safe_name(family)} - {safe_name(subfamily)}-{digest[:16]}{src.suffix.lower()}'
-                        if not dest.exists(): shutil.copy2(src,dest)
-                    else: dest=src
-                    with self.db.lock, self.db.conn:
-                        self.db.conn.execute('INSERT OR IGNORE INTO fonts(family,subfamily,weight,path,source_path,size,sha256,added_at,languages,missing) VALUES(?,?,?,?,?,?,?,?,?,0)',
-                            (family,subfamily,weight,str(dest),str(src),size,digest,time.time(),json.dumps(languages)))
-                    imported+=1
-                except Exception as e:
+                            if updates:
+                                with self.db.lock,self.db.conn:
+                                    self.db.conn.execute('UPDATE fonts SET '+', '.join(updates)+' WHERE id=?',(*values,exists['id']))
+                            duplicates+=1
+                            continue
+                        with self.db.lock,self.db.conn:
+                            self.db.conn.execute(
+                                'INSERT OR IGNORE INTO fonts(family,subfamily,weight,path,source_path,size,sha256,added_at,languages,missing) VALUES(?,?,?,?,?,?,?,?,?,0)',
+                                (family,subfamily,weight,str(dest),str(src),size,face_digest,time.time(),json.dumps(languages))
+                            )
+                        imported+=1
+                except Exception:
                     skipped+=1
-                if i%10==0 or i==total: progress(i,max(total,1),f'נבדקו {i:,} מתוך {total:,}')
+                progress(i,max(total,1),f'נבדקו {i:,} מתוך {total:,} קבצים — {imported:,} גופנים נוספו')
             return {'found':total,'imported':imported,'duplicates':duplicates,'skipped':skipped,'cancelled':self.cancel_event.is_set(),'initial':initial,'automatic':automatic}
         worker=Worker(work); worker.signals.progress.connect(self.on_progress); worker.signals.done.connect(self.scan_done); worker.signals.error.connect(self.worker_error); self.pool.start(worker)
     def cancel_scan(self):
@@ -528,12 +632,12 @@ class FontStudio(QMainWindow):
         text=QLineEdit(SAMPLE_SENTENCE); text.setPlaceholderText('הקלד טקסט להשוואה'); lay.addWidget(text)
         size=QSpinBox(); size.setRange(8,100); size.setValue(self.settings.get('preview_size',28)); lay.addWidget(size)
         splitter=QSplitter(Qt.Orientation.Horizontal); lay.addWidget(splitter,1)
-        labels=[]
+        labels=[]; font_cache={}
         for ix in indexes[:8]:
-            item=ix.data(FontListModel.FamilyRole); label=QLabel(item['family']+'\n\n'+text.text()); label.setAlignment(Qt.AlignmentFlag.AlignCenter); label.setWordWrap(True); path=item.get('path',''); fid=QFontDatabase.addApplicationFont(path) if path and Path(path).is_file() else -1; fams=QFontDatabase.applicationFontFamilies(fid) if fid>=0 else []; label.setFont(QFont(fams[0] if fams else item['family'],size.value())); splitter.addWidget(label); labels.append((label,item['family'],path))
+            item=ix.data(FontListModel.FamilyRole); label=QLabel(item['family']+'\n\n'+text.text()); label.setAlignment(Qt.AlignmentFlag.AlignCenter); label.setWordWrap(True); path=item.get('path',''); actual=font_family_from_file(path,item['family'],font_cache); label.setFont(QFont(actual,size.value())); splitter.addWidget(label); labels.append((label,item['family'],path))
         def update():
             for label,family,path in labels:
-                label.setText(family+'\n\n'+text.text()); fid=QFontDatabase.addApplicationFont(path) if path and Path(path).is_file() else -1; fams=QFontDatabase.applicationFontFamilies(fid) if fid>=0 else []; label.setFont(QFont(fams[0] if fams else family,size.value()))
+                label.setText(family+'\n\n'+text.text()); actual=font_family_from_file(path,family,font_cache); label.setFont(QFont(actual,size.value()))
         text.textChanged.connect(update); size.valueChanged.connect(update); dialog.exec()
     def closeEvent(self,event):
         try:
