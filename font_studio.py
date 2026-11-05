@@ -60,7 +60,7 @@ CONFIG_PATH = DATA_DIR / 'settings.json'
 BACKUP_DIR = DATA_DIR / 'Backups'
 BACKUP_DIR.mkdir(parents=True, exist_ok=True)
 
-DEFAULT_SETTINGS = {'preview_size': 28, 'sample_mode': 'משפט', 'preview_text': '', 'theme': 'בהירה', 'preview_color': '#4e3a98', 'last_scan_done': False}
+DEFAULT_SETTINGS = {'preview_size': 28, 'sample_mode': 'משפט', 'preview_text': '', 'theme': 'בהירה', 'preview_color': '#4e3a98', 'last_scan_done': False, 'last_system_scan': 0}
 
 def load_settings():
     try:
@@ -533,7 +533,7 @@ class FontStudio(QMainWindow):
         self.scan_btn.setEnabled(True)
         self.statusBar().showMessage(f'נטענו {len(items):,} משפחות גופנים')
         # Start maintenance only after the window is visible and the catalog is ready.
-        QTimer.singleShot(0, self.scan_default_locations)
+        QTimer.singleShot(1800, self.scan_default_locations)
     def init_ui(self):
         central=QWidget()
         central.setObjectName('appRoot')
@@ -708,8 +708,11 @@ class FontStudio(QMainWindow):
         try: self.model.replace(self.db.rows(self.search.text().strip(), self.favorites.isChecked(), self.current_language()))
         except Exception as e: self.statusBar().showMessage(f'שגיאה בטעינת הרשימה: {e}')
     def scan_default_locations(self):
-        # Only scan the managed library automatically; external folders remain opt-in.
-        self.run_scan([LIBRARY_DIR], initial=not self.settings.get('last_scan_done', False), automatic=True)
+        # Keep startup light: scan installed Windows font folders at most once a week.
+        last_system_scan = float(self.settings.get('last_system_scan', 0) or 0)
+        include_installed = (time.time() - last_system_scan) >= 7 * 24 * 60 * 60
+        self.run_scan([LIBRARY_DIR], initial=not self.settings.get('last_scan_done', False),
+                      automatic=True, include_installed=include_installed)
     def choose_folder(self):
         folder=QFileDialog.getExistingDirectory(self,'בחר תיקייה לייבוא גופנים',str(Path.home()))
         if folder: self.run_scan([Path(folder)])
@@ -717,7 +720,7 @@ class FontStudio(QMainWindow):
         self.busy=busy; self.scan_btn.setEnabled(not busy); self.cancel_btn.setVisible(busy); self.cancel_btn.setEnabled(busy); self.progress.setVisible(busy)
         if busy: self.progress.setRange(0,0)
         else: self.progress.setRange(0,100)
-    def run_scan(self, roots, initial=False, automatic=False):
+    def run_scan(self, roots, initial=False, automatic=False, include_installed=False):
         if self.db is None:
             if not automatic: self.statusBar().showMessage('מסד הנתונים עדיין נטען…')
             return
@@ -729,7 +732,7 @@ class FontStudio(QMainWindow):
         self.set_busy(True); self.cancel_event.clear()
         def work(progress):
             candidates=[]
-            installed_roots, registered_files = windows_installed_font_locations() if automatic else ([], [])
+            installed_roots, registered_files = windows_installed_font_locations() if include_installed else ([], [])
             scan_roots = list(dict.fromkeys([*roots, *installed_roots]))
             installed_roots = [p.resolve() for p in installed_roots]
             seen_paths = set()
@@ -811,7 +814,7 @@ class FontStudio(QMainWindow):
                 except Exception:
                     skipped+=1
                 progress(i,max(total,1),f'נבדקו {i:,} מתוך {total:,} קבצים — {imported:,} גופנים נוספו')
-            return {'found':total,'imported':imported,'duplicates':duplicates,'skipped':skipped,'cancelled':self.cancel_event.is_set(),'initial':initial,'automatic':automatic}
+            return {'found':total,'imported':imported,'duplicates':duplicates,'skipped':skipped,'cancelled':self.cancel_event.is_set(),'initial':initial,'automatic':automatic,'include_installed':include_installed}
         worker=Worker(work); worker.signals.progress.connect(self.on_progress); worker.signals.done.connect(self.scan_done); worker.signals.error.connect(self.worker_error); self.pool.start(worker)
     def cancel_scan(self):
         self.cancel_event.set(); self.cancel_btn.setEnabled(False); self.statusBar().showMessage('הביטול יתבצע בצורה בטוחה לאחר סיום בדיקת הקובץ הנוכחי…')
@@ -820,7 +823,11 @@ class FontStudio(QMainWindow):
     def scan_done(self, result):
         self.set_busy(False); self.refresh()
         if result.get('initial'):
-            self.settings['last_scan_done']=True; save_settings(self.settings)
+            self.settings['last_scan_done']=True
+        if result.get('include_installed'):
+            self.settings['last_system_scan']=time.time()
+        if result.get('initial') or result.get('include_installed'):
+            save_settings(self.settings)
         if result.get('automatic'):
             self.statusBar().showMessage(f"הספרייה עודכנה: {result['imported']:,} גופנים חדשים, {result['duplicates']:,} קיימים")
             return
@@ -907,6 +914,28 @@ def main():
     win = FontStudio()
     if not app_icon.isNull(): win.setWindowIcon(app_icon)
     win.show()
+
+    # Reinforce native Win32 taskbar icons after the HWND has been created.
+    if sys.platform == 'win32' and not app_icon.isNull():
+        def apply_native_taskbar_icon():
+            try:
+                import ctypes
+                from ctypes import wintypes
+                hwnd = wintypes.HWND(int(win.winId()))
+                user32 = ctypes.windll.user32
+                big_size = (user32.GetSystemMetrics(11), user32.GetSystemMetrics(12))
+                small_size = (user32.GetSystemMetrics(49), user32.GetSystemMetrics(50))
+                handles = []
+                for icon_size, slot in ((big_size, 1), (small_size, 0)):
+                    handle = user32.LoadImageW(None, str(icon_path), 1,
+                                               icon_size[0], icon_size[1], 0x0010)
+                    if handle:
+                        user32.SendMessageW(hwnd, 0x0080, slot, handle)
+                        handles.append(handle)
+                win._taskbar_icon_handles = handles
+            except Exception:
+                pass
+        QTimer.singleShot(250, apply_native_taskbar_icon)
     sys.exit(app.exec())
 
 if __name__=='__main__': main()
