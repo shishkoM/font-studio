@@ -66,7 +66,7 @@ a.binaries = filtered_binaries
 # Font Studio does not load Qt translation catalogs.
 a.datas = [entry for entry in a.datas if not entry[0].lower().endswith(".qm")]
 
-pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+pyz = PYZ(a.pure, cipher=block_cipher)
 exe = EXE(
     pyz,
     a.scripts,
