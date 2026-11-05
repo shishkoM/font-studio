@@ -86,6 +86,45 @@ def file_hash(path: Path) -> str:
     return h.hexdigest()
 
 
+def windows_installed_font_locations():
+    """Return Windows font folders and explicitly registered font files."""
+    if os.name != 'nt':
+        return [], []
+    roots = []
+    files = []
+    windir = Path(os.environ.get('WINDIR', r'C:\\Windows'))
+    roots.append(windir / 'Fonts')
+    local_fonts = Path(os.environ.get('LOCALAPPDATA', str(Path.home()))) / 'Microsoft' / 'Windows' / 'Fonts'
+    roots.append(local_fonts)
+    try:
+        import winreg
+        key_path = r'SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Fonts'
+        for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+            try:
+                with winreg.OpenKey(hive, key_path) as key:
+                    for index in range(winreg.QueryInfoKey(key)[1]):
+                        try:
+                            _, value, _ = winreg.EnumValue(key, index)
+                            if not isinstance(value, str) or not value.strip():
+                                continue
+                            expanded = os.path.expandvars(value.strip().strip('"'))
+                            candidate = Path(expanded)
+                            if not candidate.is_absolute():
+                                candidate = (local_fonts if hive == winreg.HKEY_CURRENT_USER else windir / 'Fonts') / candidate
+                            if candidate.suffix.lower() in EXTENSIONS:
+                                files.append(candidate)
+                                roots.append(candidate.parent)
+                        except OSError:
+                            continue
+            except OSError:
+                continue
+    except ImportError:
+        pass
+    unique_roots = list(dict.fromkeys(p for p in roots if p.exists()))
+    unique_files = list(dict.fromkeys(p for p in files if p.is_file()))
+    return unique_roots, unique_files
+
+
 def is_within_directory(path: Path, directory: Path) -> bool:
     """Return whether path resolves inside directory, including nested folders."""
     try:
@@ -516,15 +555,29 @@ class FontStudio(QMainWindow):
         self.set_busy(True); self.cancel_event.clear()
         def work(progress):
             candidates=[]
-            for root in roots:
+            installed_roots, registered_files = windows_installed_font_locations() if automatic else ([], [])
+            scan_roots = list(dict.fromkeys([*roots, *installed_roots]))
+            installed_roots = [p.resolve() for p in installed_roots]
+            seen_paths = set()
+            for root in scan_roots:
                 if not root.exists(): continue
                 for base, dirs, files in os.walk(root):
                     dirs[:]=[d for d in dirs if d not in {'System Volume Information','$RECYCLE.BIN','Backups','.git'}]
                     for fn in files:
-                        if Path(fn).suffix.lower() in EXTENSIONS: candidates.append(Path(base)/fn)
+                        path = Path(base) / fn
+                        if path.suffix.lower() in EXTENSIONS:
+                            resolved = str(path.resolve()).casefold()
+                            if resolved not in seen_paths:
+                                candidates.append((path, any(is_within_directory(path, installed_root) for installed_root in installed_roots)))
+                                seen_paths.add(resolved)
+            for path in registered_files:
+                resolved = str(path.resolve()).casefold()
+                if resolved not in seen_paths:
+                    candidates.append((path, True))
+                    seen_paths.add(resolved)
             total=len(candidates); imported=duplicates=skipped=0
             progress(0,max(total,1),f'נמצאו {total:,} קבצים. מתחיל בדיקה…')
-            for i, src in enumerate(candidates,1):
+            for i, (src, installed_source) in enumerate(candidates,1):
                 if self.cancel_event.is_set(): break
                 try:
                     size=src.stat().st_size
@@ -539,7 +592,7 @@ class FontStudio(QMainWindow):
                         face_records = extract_collection_faces(src, file_digest, faces)
                     else:
                         first_family, first_subfamily, _, _, _ = faces[0]
-                        if is_within_directory(src, LIBRARY_DIR):
+                        if installed_source or is_within_directory(src, LIBRARY_DIR):
                             dest = src
                         else:
                             dest_name = f'{safe_name(first_family)} - {safe_name(first_subfamily)}-{file_digest[:10]}{src.suffix.lower()}'
@@ -560,6 +613,8 @@ class FontStudio(QMainWindow):
                             exists=self.db.conn.execute('SELECT id, languages FROM fonts WHERE sha256=?',(face_digest,)).fetchone()
                         if exists:
                             updates=[]; values=[]
+                            if installed_source:
+                                updates.append('installed=1')
                             if is_collection:
                                 updates.extend(['path=?', 'source_path=?', 'missing=0'])
                                 values.extend([str(dest), str(src)])
@@ -575,8 +630,8 @@ class FontStudio(QMainWindow):
                             continue
                         with self.db.lock,self.db.conn:
                             self.db.conn.execute(
-                                'INSERT OR IGNORE INTO fonts(family,subfamily,weight,path,source_path,size,sha256,added_at,languages,missing) VALUES(?,?,?,?,?,?,?,?,?,0)',
-                                (family,subfamily,weight,str(dest),str(src),size,face_digest,time.time(),json.dumps(languages))
+                                'INSERT OR IGNORE INTO fonts(family,subfamily,weight,path,source_path,size,sha256,added_at,languages,missing,installed) VALUES(?,?,?,?,?,?,?,?,?,0,?)',
+                                (family,subfamily,weight,str(dest),str(src),size,face_digest,time.time(),json.dumps(languages),int(installed_source))
                             )
                         imported+=1
                 except Exception:
