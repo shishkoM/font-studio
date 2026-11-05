@@ -422,6 +422,29 @@ class FamilyDelegate(QStyledItemDelegate):
             painter.drawText(button_rect,Qt.AlignmentFlag.AlignCenter,label)
             x+=w+6
         painter.restore()
+    def editorEvent(self, event, model, option, index):
+        from PySide6.QtCore import QEvent, QRect
+        if event.type()!=QEvent.Type.MouseButtonRelease or event.button()!=Qt.MouseButton.LeftButton:
+            return False
+        item=index.data(FontListModel.FamilyRole) or {}
+        rect=option.rect.adjusted(8,3,-8,-3)
+        x=rect.left()+12
+        y=rect.top()+30
+        for key,w in [('try',62),('install',62),('favorite',32)]:
+            hit=QRect(x,y,w,30)
+            if hit.contains(event.position().toPoint()):
+                family=item.get('family','')
+                if key=='try':
+                    self.owner.try_family(family)
+                elif key=='install':
+                    self.owner.install_family(family)
+                else:
+                    self.owner.db.toggle_favorite(family)
+                    self.owner.refresh()
+                return True
+            x+=w+6
+        return False
+
     def sizeHint(self, option, index): return QSize(700, 92)
 
 class TryDialog(QDialog):
