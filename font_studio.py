@@ -653,9 +653,7 @@ class FontStudio(QMainWindow):
             self.setStyleSheet("""
                 QMainWindow { background:#17151f; }
                 QWidget#appRoot,QWidget#content { background:#17151f; color:#f2effa; }
-                QFrame#sidebar { background:#211d2b; border-left:1px solid #393346; }
                 QLabel#brand { color:#c9bbff; font-size:22px; font-weight:700; }
-                QLabel#navCaption,QLabel#sidebarHint { color:#928aa5; }
                 QPushButton#navButton { text-align:right; background:transparent; color:#c8c1d5; border:0; padding:11px 12px; border-radius:7px; }
                 QPushButton#navButton:checked { background:#39304f; color:#d8ccff; font-weight:600; }
                 QLabel#title { font-size:25px; font-weight:700; color:#f2effa; }
@@ -672,9 +670,7 @@ class FontStudio(QMainWindow):
             self.setStyleSheet("""
                 QMainWindow { background:#f5f4f8; }
                 QWidget#appRoot,QWidget#content { background:#f5f4f8; color:#292638; }
-                QFrame#sidebar { background:#ffffff; border-left:1px solid #e9e6ef; }
                 QLabel#brand { color:#5e45c7; font-size:22px; font-weight:700; }
-                QLabel#navCaption,QLabel#sidebarHint { color:#8b8597; }
                 QPushButton#navButton { text-align:right; background:transparent; color:#5f5a6b; border:0; padding:11px 12px; border-radius:7px; }
                 QPushButton#navButton:checked { background:#f0edfb; color:#5e45c7; font-weight:600; }
                 QLabel#title { font-size:25px; font-weight:700; color:#292638; }
