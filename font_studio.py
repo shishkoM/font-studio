@@ -60,7 +60,7 @@ CONFIG_PATH = DATA_DIR / 'settings.json'
 BACKUP_DIR = DATA_DIR / 'Backups'
 BACKUP_DIR.mkdir(parents=True, exist_ok=True)
 
-DEFAULT_SETTINGS = {'preview_size': 28, 'sample_mode': 'משפט', 'theme': 'בהירה', 'preview_color': '#4e3a98', 'last_scan_done': False}
+DEFAULT_SETTINGS = {'preview_size': 28, 'sample_mode': 'משפט', 'preview_text': '', 'theme': 'בהירה', 'preview_color': '#4e3a98', 'last_scan_done': False}
 
 def load_settings():
     try:
@@ -335,11 +335,12 @@ class FamilyDelegate(QStyledItemDelegate):
         weights=', '.join((item.get('weights') or '').split(','))
         painter.drawText(right-650,y+25,650,20,Qt.AlignmentFlag.AlignRight|Qt.AlignmentFlag.AlignVCenter, f"{item.get('count',0)} סגנונות  •  {weights[:110]}")
         lang=self.owner.current_language()
-        sample=(SAMPLE_ALPHABET if self.owner.settings.get('sample_mode')=='אלפבית' else SAMPLE_SENTENCE) if lang in ('all','he') else LANGUAGE_SAMPLES.get(lang, SAMPLE_SENTENCE)
+        custom_text = self.owner.preview_text.text().strip() if hasattr(self.owner, 'preview_text') else ''
+        sample = custom_text or ((SAMPLE_ALPHABET if self.owner.settings.get('sample_mode')=='אלפבית' else SAMPLE_SENTENCE) if lang in ('all','he') else LANGUAGE_SAMPLES.get(lang, SAMPLE_SENTENCE))
         font=self.font_for_item(item); font.setPointSize(int(self.owner.settings.get('preview_size',28)))
         painter.setFont(font); painter.setPen(QColor(self.owner.settings.get('preview_color','#4e3a98'))) 
         sample_rect=rect.adjusted(18,55,-300,-8)
-        painter.drawText(sample_rect,Qt.AlignmentFlag.AlignVCenter|Qt.AlignmentFlag.AlignRight,sample)
+        painter.drawText(sample_rect,Qt.AlignmentFlag.AlignVCenter|Qt.AlignmentFlag.AlignRight|Qt.TextFlag.TextWordWrap,sample)
         # Clickable action chips are painted by the delegate, avoiding thousands of QWidget controls.
         actions=[('התנסות', 'try'), ('התקנה', 'install'), ('☆' if not item.get('favorite') else '★', 'favorite')]
         x=rect.right()-112
@@ -452,7 +453,7 @@ class FontStudio(QMainWindow):
         self.cancel_btn=QPushButton('ביטול סריקה'); self.cancel_btn.setVisible(False); self.cancel_btn.clicked.connect(self.cancel_scan); controls.addWidget(self.cancel_btn)
         self.compare_btn=QPushButton('השוואת גופנים'); self.compare_btn.clicked.connect(self.compare_selected); controls.addWidget(self.compare_btn); root.addLayout(controls)
         preview=QHBoxLayout(); preview.addWidget(QLabel('גודל תצוגה')); self.preview_slider=QSlider(Qt.Orientation.Horizontal); self.preview_slider.setRange(14,64); self.preview_slider.setValue(int(self.settings.get('preview_size',28))); self.preview_slider.valueChanged.connect(self.change_preview_size); preview.addWidget(self.preview_slider,1); self.size_label=QLabel(str(self.preview_slider.value())); preview.addWidget(self.size_label)
-        preview.addWidget(QLabel('טקסט')); self.sample_mode=QComboBox(); self.sample_mode.addItems(['משפט','אלפבית']); self.sample_mode.setCurrentText(self.settings.get('sample_mode','משפט')); self.sample_mode.currentTextChanged.connect(self.change_sample); preview.addWidget(self.sample_mode); root.addLayout(preview)
+        preview.addWidget(QLabel('טקסט לתצוגה בכל הגופנים')); self.preview_text=QLineEdit(); self.preview_text.setText(self.settings.get('preview_text','')); self.preview_text.setPlaceholderText('הקלד מילה או משפט — יוצג בכל הגופנים ברשימה'); self.preview_text.setClearButtonEnabled(True); self.preview_text.textChanged.connect(self.change_preview_text); preview.addWidget(self.preview_text,2); self.sample_mode=QComboBox(); self.sample_mode.addItems(['משפט','אלפבית']); self.sample_mode.setCurrentText(self.settings.get('sample_mode','משפט')); self.sample_mode.currentTextChanged.connect(self.change_sample); preview.addWidget(self.sample_mode); root.addLayout(preview)
         self.list=QListView(); self.list.setModel(self.model); self.list.setItemDelegate(FamilyDelegate(self)); self.list.setUniformItemSizes(True); self.list.setSpacing(2); self.list.setSelectionMode(QListView.SelectionMode.ExtendedSelection); self.list.doubleClicked.connect(self.try_selected); self.list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu); self.list.customContextMenuRequested.connect(self.context_menu); root.addWidget(self.list,1)
         self.progress=QProgressBar(); self.progress.setVisible(False); self.progress.setTextVisible(True); root.addWidget(self.progress)
         self.statusBar().showMessage('מוכן'); self.statusBar().setLayoutDirection(Qt.LayoutDirection.RightToLeft)
@@ -473,6 +474,10 @@ class FontStudio(QMainWindow):
             self.settings['preview_color']=color.name(); save_settings(self.settings); self.list.viewport().update()
     def change_preview_size(self, value): self.settings['preview_size']=value; self.size_label.setText(str(value)); save_settings(self.settings); self.list.viewport().update()
     def change_sample(self, value): self.settings['sample_mode']=value; save_settings(self.settings); self.list.viewport().update()
+    def change_preview_text(self, value):
+        self.settings['preview_text'] = value
+        save_settings(self.settings)
+        self.list.viewport().update()
     def current_language(self): return self.language.currentData() if hasattr(self,'language') else self.settings.get('language','all')
     def change_language(self, _value):
         self.settings['language']=self.current_language(); save_settings(self.settings); self.refresh(); self.list.viewport().update()
