@@ -2,6 +2,7 @@
 __pycache__/
 build/
 dist/
-*.spec
+# Keep the dedicated application build spec under version control.
+!packaging/fontstudio.spec
 FontStudioData/
 FontLibrary/
