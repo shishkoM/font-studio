@@ -4,6 +4,7 @@
 Packaging-only configuration: font_studio.py and runtime behavior are unchanged.
 """
 from pathlib import Path
+from PyInstaller.utils.hooks import collect_submodules
 
 block_cipher = None
 
@@ -12,7 +13,11 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[("assets/fontstudio.ico", "assets")],
-    hiddenimports=[],
+    hiddenimports=(
+        collect_submodules("fontTools.ttLib")
+        + collect_submodules("fontTools.cffLib")
+        + collect_submodules("fontTools.misc")
+    ),
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -78,7 +83,7 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    upx_exclude=[],
+    upx_exclude=["qwindows.dll", "qmodernwindowsstyle.dll", "qico.dll"],
     runtime_tmpdir=None,
     console=False,
     disable_windowed_traceback=False,
