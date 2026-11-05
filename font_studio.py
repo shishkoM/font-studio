@@ -143,7 +143,23 @@ def extract_collection_faces(src: Path, source_digest: str, faces):
     output_dir = DATA_DIR / 'ExtractedFonts' / source_digest
     output_dir.mkdir(parents=True, exist_ok=True)
     results = []
+    created = []
     collection = TTCollection(str(src), lazy=False)
+
+    def valid_file(path, family, expected_outline):
+        try:
+            if not path.is_file() or path.stat().st_size == 0:
+                return False
+            check = TTFont(str(path), lazy=False, recalcBBoxes=False, recalcTimestamp=False)
+            try:
+                actual_family = _font_face_metadata(check, path)[0]
+                has_outline = expected_outline in check
+                return actual_family.casefold() == family.casefold() and has_outline
+            finally:
+                check.close()
+        except Exception:
+            return False
+
     try:
         if len(collection.fonts) != len(faces):
             raise ValueError('מספר פני הגופן השתנה בין שלבי הקריאה')
@@ -152,36 +168,38 @@ def extract_collection_faces(src: Path, source_digest: str, faces):
                 raise ValueError('אינדקס פני גופן לא תואם')
             font = collection.fonts[index]
             # CFF/CFF2 outlines are OpenType; glyf outlines are TrueType.
-            suffix = '.otf' if ('CFF ' in font or 'CFF2' in font) else '.ttf'
+            outline = 'CFF2' if 'CFF2' in font else ('CFF ' if 'CFF ' in font else 'glyf')
+            suffix = '.otf' if outline in {'CFF ', 'CFF2'} else '.ttf'
             filename = f'face-{index:03d}-{safe_name(family)}{suffix}'
             dest = output_dir / filename
             temp = output_dir / f'.{filename}.tmp{suffix}'
 
-            def valid_file(path):
-                if not path.is_file() or path.stat().st_size == 0:
-                    return False
-                check = TTFont(str(path), lazy=False, recalcBBoxes=False, recalcTimestamp=False)
-                try:
-                    actual = _font_face_metadata(check, path)
-                    return actual[0].casefold() == family.casefold()
-                finally:
-                    check.close()
-
-            if not valid_file(dest):
+            if not valid_file(dest, family, outline):
                 try:
                     temp.unlink(missing_ok=True)
                     font.save(str(temp))
-                    if not valid_file(temp):
+                    if not valid_file(temp, family, outline):
                         raise ValueError(f'קובץ הגופן שחולץ אינו תקין: {family}')
                     temp.replace(dest)
+                    created.append(dest)
                 finally:
                     temp.unlink(missing_ok=True)
             results.append((family, subfamily, weight, languages, face_index,
                             dest, file_hash(dest)))
+
+        # Never associate extracted faces with a source that changed mid-extraction.
+        if file_hash(src) != source_digest:
+            raise ValueError('קובץ המקור השתנה במהלך חילוץ הגופנים')
+    except Exception:
+        for path in created:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        raise
     finally:
         collection.close()
     return results
-
 
 def font_family_from_file(path: str, requested_family: str, cache: dict):
     """Register a font file once and select the requested family from collections."""
