@@ -542,7 +542,8 @@ class FontStudio(QMainWindow):
         shell.setContentsMargins(0,0,0,0)
         shell.setSpacing(0)
 
-        # Main content uses the full window width; navigation stays in the toolbar controls.\n        content=QWidget()
+        # Main content uses the full window width; navigation stays in the toolbar controls.
+        content=QWidget()
         content.setObjectName('content')
         root=QVBoxLayout(content)
         root.setContentsMargins(28,24,28,18)
