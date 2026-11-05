@@ -42,6 +42,7 @@ jobs:
             Download FontStudio.exe below.
           prerelease: true
           make_latest: false
+          overwrite_files: true
           files: dist/FontStudio.exe
 
       # Keep a stable download URL pointing to the newest successful manual build.
