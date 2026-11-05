@@ -15,6 +15,15 @@ jobs:
           cache: pip
       - name: Install dependencies
         run: python -m pip install --upgrade pip && pip install -r requirements.txt pyinstaller
+      - name: Install UPX
+        run: choco install upx --yes --no-progress
+      - name: Verify UPX
+        run: upx --version
+      - name: Configure ASCII-only PyInstaller cache
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "C:\font-studio\build\pyi-cache" | Out-Null
+          "PYINSTALLER_CONFIG_DIR=C:\font-studio\build\pyi-cache" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Compile check
         run: python -m py_compile font_studio.py
       - name: Verify icon file
@@ -30,8 +39,13 @@ jobs:
             Get-ChildItem assets -Force
             exit 1
           }
-      - name: Build EXE
-        run: pyinstaller --noconfirm --clean --onefile --windowed --name FontStudio --icon assets/fontstudio.ico --add-data "assets/fontstudio.ico;assets" --collect-all PySide6 --collect-all fontTools font_studio.py
+      - name: Build compact EXE
+        run: pyinstaller --noconfirm --clean packaging/fontstudio.spec
+      - name: Report EXE size
+        shell: pwsh
+        run: |
+          $exe = Get-Item "dist/FontStudio.exe"
+          Write-Host ("FontStudio.exe size: {0:N2} MiB ({1:N0} bytes)" -f ($exe.Length / 1MB), $exe.Length)
       - name: Publish EXE to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -58,4 +72,5 @@ jobs:
             Historical builds remain available under their build-N tags.
           prerelease: true
           make_latest: false
+          overwrite_files: true
           files: dist/FontStudio.exe
