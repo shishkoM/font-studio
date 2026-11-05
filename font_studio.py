@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from PySide6.QtCore import Qt, QAbstractListModel, QModelIndex, QObject, Signal, QRunnable, QThreadPool, QSize, QSortFilterProxyModel
-from PySide6.QtGui import QFont, QFontDatabase, QPainter, QColor, QPen, QFontMetrics, QIcon
+from PySide6.QtGui import QFont, QFontDatabase, QPainter, QColor, QPen, QFontMetrics, QIcon, QCursor
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QComboBox, QSlider, QCheckBox, QListView, QProgressBar, QFileDialog, QMessageBox,
     QDialog, QTextEdit, QSpinBox, QDialogButtonBox, QFrame, QMenu, QSplitter, QToolButton, QStatusBar, QStyle, QColorDialog)
@@ -419,20 +419,30 @@ class FamilyDelegate(QStyledItemDelegate):
         actions=[('התנסות','try',68),('מותקן' if item.get('installed') else 'התקנה','install',72),('★' if item.get('favorite') else '☆','favorite',28)]
         x=rect.left()+12
         y=rect.top()+27
+        cursor_pos=self.owner.list.viewport().mapFromGlobal(QCursor.pos()) if hasattr(self.owner,'list') else None
         for label,key,w in actions:
             button_rect=QRect(x,y,w,34)
+            hovered=key in ('try','install') and cursor_pos is not None and button_rect.contains(cursor_pos)
+            draw_rect=button_rect.adjusted(-2,-2,2,2) if hovered else button_rect
             if key=='install':
                 painter.setPen(Qt.PenStyle.NoPen)
-                painter.setBrush(QColor('#315f50' if item.get('installed') and dark else '#e5f3ed' if item.get('installed') else '#765be8' if dark else '#654bd1'))
-                painter.drawRoundedRect(button_rect,7,7)
-                painter.setPen(QColor('#a9e0c8' if dark else '#287a59') if item.get('installed') else QColor('#ffffff'))
+                if item.get('installed'):
+                    fill=QColor('#cce9dc' if hovered else '#e5f3ed') if not dark else QColor('#426d5d' if hovered else '#315f50')
+                    text_color=QColor('#1d6849' if not dark else '#c5f0dc')
+                else:
+                    fill=QColor('#765be8' if dark else '#654bd1')
+                    if hovered: fill=QColor('#8b74f0' if dark else '#765fe0')
+                    text_color=QColor('#ffffff')
+                painter.setBrush(fill)
+                painter.drawRoundedRect(draw_rect,8,8)
+                painter.setPen(text_color)
             else:
-                painter.setPen(QPen(border))
-                painter.setBrush(QColor('#332d42' if dark else '#faf9fc'))
-                painter.drawRoundedRect(button_rect,7,7)
-                painter.setPen(accent)
-            painter.setFont(QFont('Segoe UI',8,QFont.Weight.DemiBold))
-            painter.drawText(button_rect,Qt.AlignmentFlag.AlignCenter,label)
+                painter.setPen(QPen(accent if hovered else border, 1.5 if hovered else 1))
+                painter.setBrush(QColor('#eee9ff' if hovered and not dark else '#42375a' if hovered else '#332d42' if dark else '#faf9fc'))
+                painter.drawRoundedRect(draw_rect,8,8)
+                painter.setPen(accent if not dark or hovered else QColor('#d0c4ff'))
+            painter.setFont(QFont('Segoe UI',9 if hovered else 8,QFont.Weight.DemiBold))
+            painter.drawText(draw_rect,Qt.AlignmentFlag.AlignCenter,label)
             x+=w+5
         painter.restore()
 
@@ -620,6 +630,9 @@ class FontStudio(QMainWindow):
         self.list.setModel(self.model)
         self.list.setItemDelegate(FamilyDelegate(self))
         self.list.setUniformItemSizes(True)
+        self.list.setMouseTracking(True)
+        self.list.viewport().setMouseTracking(True)
+        self.list.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
         self.list.setSpacing(1)
         self.list.setSelectionMode(QListView.SelectionMode.ExtendedSelection)
         self.list.doubleClicked.connect(self.try_selected)
