@@ -5,3 +5,4 @@ dist/
 *.spec
 FontStudioData/
 FontLibrary/
+!packaging/fontstudio.spec

@@ -15,6 +15,8 @@ jobs:
           cache: pip
       - name: Install dependencies
         run: python -m pip install --upgrade pip && pip install -r requirements.txt pyinstaller
+      - name: Install UPX
+        run: choco install upx -y --no-progress
       - name: Compile check
         run: python -m py_compile font_studio.py
       - name: Verify icon file
@@ -31,7 +33,9 @@ jobs:
             exit 1
           }
       - name: Build EXE
-        run: pyinstaller --noconfirm --clean --onefile --windowed --name FontStudio --icon assets/fontstudio.ico --add-data "assets/fontstudio.ico;assets" --collect-all PySide6 --collect-all fontTools font_studio.py
+        run: |
+          pyinstaller --noconfirm --clean packaging/fontstudio.spec
+          "FontStudio.exe size: {0:N1} MB" -f ((Get-Item dist/FontStudio.exe).Length / 1MB)
       - name: Publish EXE to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
