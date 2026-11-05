@@ -136,6 +136,53 @@ def font_metadata(path: Path):
         raise ValueError(str(e)) from e
 
 
+def extract_collection_faces(src: Path, source_digest: str, faces):
+    """Extract each TTC/OTC face into a cached, independently loadable TTF/OTF."""
+    from fontTools.ttLib import TTCollection, TTFont
+
+    output_dir = DATA_DIR / 'ExtractedFonts' / source_digest
+    output_dir.mkdir(parents=True, exist_ok=True)
+    results = []
+    collection = TTCollection(str(src), lazy=False)
+    try:
+        if len(collection.fonts) != len(faces):
+            raise ValueError('מספר פני הגופן השתנה בין שלבי הקריאה')
+        for index, (family, subfamily, weight, languages, face_index) in enumerate(faces):
+            if face_index != index:
+                raise ValueError('אינדקס פני גופן לא תואם')
+            font = collection.fonts[index]
+            # CFF/CFF2 outlines are OpenType; glyf outlines are TrueType.
+            suffix = '.otf' if ('CFF ' in font or 'CFF2' in font) else '.ttf'
+            filename = f'face-{index:03d}-{safe_name(family)}{suffix}'
+            dest = output_dir / filename
+            temp = output_dir / f'.{filename}.tmp{suffix}'
+
+            def valid_file(path):
+                if not path.is_file() or path.stat().st_size == 0:
+                    return False
+                check = TTFont(str(path), lazy=False, recalcBBoxes=False, recalcTimestamp=False)
+                try:
+                    actual = _font_face_metadata(check, path)
+                    return actual[0].casefold() == family.casefold()
+                finally:
+                    check.close()
+
+            if not valid_file(dest):
+                try:
+                    temp.unlink(missing_ok=True)
+                    font.save(str(temp))
+                    if not valid_file(temp):
+                        raise ValueError(f'קובץ הגופן שחולץ אינו תקין: {family}')
+                    temp.replace(dest)
+                finally:
+                    temp.unlink(missing_ok=True)
+            results.append((family, subfamily, weight, languages, face_index,
+                            dest, file_hash(dest)))
+    finally:
+        collection.close()
+    return results
+
+
 def font_family_from_file(path: str, requested_family: str, cache: dict):
     """Register a font file once and select the requested family from collections."""
     if not path or not Path(path).is_file():
@@ -453,35 +500,38 @@ class FontStudio(QMainWindow):
                     file_digest=file_hash(src)
                     faces=font_metadata(src)
                     if not faces: skipped+=1; continue
-                    is_collection=len(faces)>1 or src.suffix.lower() in {'.ttc','.otc'}
-
-                    # Keep one physical copy of a collection, but register each face
-                    # separately with a stable per-face identity.
-                    if is_within_directory(src, LIBRARY_DIR):
-                        dest=src
+                    is_collection = src.suffix.lower() in {'.ttc', '.otc'}
+                    if is_collection:
+                        # Collections are never registered/copied as active font files.
+                        # Each face gets its own validated, cached standalone font file.
+                        face_records = extract_collection_faces(src, file_digest, faces)
                     else:
-                        first_family,first_subfamily,_,_,_=faces[0]
-                        if is_collection:
-                            dest_name=f'{safe_name(first_family)} - collection-{file_digest[:10]}{src.suffix.lower()}'
+                        first_family, first_subfamily, _, _, _ = faces[0]
+                        if is_within_directory(src, LIBRARY_DIR):
+                            dest = src
                         else:
-                            dest_name=f'{safe_name(first_family)} - {safe_name(first_subfamily)}-{file_digest[:10]}{src.suffix.lower()}'
-                        dest=LIBRARY_DIR/dest_name
-                        if dest.exists():
-                            try:
-                                if file_hash(dest)!=file_digest:
-                                    dest=LIBRARY_DIR/f'{safe_name(first_family)} - {file_digest[:16]}{src.suffix.lower()}'
-                            except OSError:
-                                dest=LIBRARY_DIR/f'{safe_name(first_family)} - {file_digest[:16]}{src.suffix.lower()}'
-                        if not dest.exists(): shutil.copy2(src,dest)
+                            dest_name = f'{safe_name(first_family)} - {safe_name(first_subfamily)}-{file_digest[:10]}{src.suffix.lower()}'
+                            dest = LIBRARY_DIR / dest_name
+                            if dest.exists():
+                                try:
+                                    if file_hash(dest) != file_digest:
+                                        dest = LIBRARY_DIR / f'{safe_name(first_family)} - {file_digest[:16]}{src.suffix.lower()}'
+                                except OSError:
+                                    dest = LIBRARY_DIR / f'{safe_name(first_family)} - {file_digest[:16]}{src.suffix.lower()}'
+                            if not dest.exists():
+                                shutil.copy2(src, dest)
+                        family, subfamily, weight, languages, face_index = faces[0]
+                        face_records = [(family, subfamily, weight, languages, face_index, dest, file_digest)]
 
-                    for family,subfamily,weight,languages,face_index in faces:
-                        face_digest=(hashlib.sha256(f'{file_digest}:face:{face_index}'.encode('utf-8')).hexdigest()
-                                     if is_collection else file_digest)
+                    for family,subfamily,weight,languages,face_index,dest,face_digest in face_records:
                         with self.db.lock:
                             exists=self.db.conn.execute('SELECT id, languages FROM fonts WHERE sha256=?',(face_digest,)).fetchone()
                         if exists:
                             updates=[]; values=[]
-                            if is_within_directory(src, LIBRARY_DIR):
+                            if is_collection:
+                                updates.extend(['path=?', 'source_path=?', 'missing=0'])
+                                values.extend([str(dest), str(src)])
+                            elif is_within_directory(src, LIBRARY_DIR):
                                 updates.extend(['path=?','source_path=?','missing=0'])
                                 values.extend([str(src),str(src)])
                             if not exists['languages'] or exists['languages']=='[]':
