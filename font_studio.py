@@ -578,7 +578,6 @@ class FontStudio(QMainWindow):
         controls.addWidget(self.search,1)
         self.favorites=QCheckBox('מועדפים בלבד')
         self.favorites.toggled.connect(self.refresh)
-        self.favorites.toggled.connect(self.update_navigation)
         controls.addWidget(self.favorites)
         self.language=QComboBox()
         self.language.setToolTip('הצג רק גופנים שתומכים בכתב של השפה שנבחרה')
@@ -648,7 +647,6 @@ class FontStudio(QMainWindow):
         self.statusBar().showMessage('מוכן')
         self.statusBar().setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         shell.addWidget(content,1)
-        self.update_navigation()
 
     def apply_theme(self):
         if self.settings.get('theme')=='כהה':
