@@ -365,63 +365,76 @@ class FamilyDelegate(QStyledItemDelegate):
         item=index.data(FontListModel.FamilyRole) or {}
         painter.save()
         rect=option.rect.adjusted(8,3,-8,-3)
+        dark=self.owner.settings.get('theme')=='כהה'
         selected=bool(option.state & QStyle.StateFlag.State_Selected)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor('#eeeaff' if selected else ('#242130' if self.owner.settings.get('theme')=='כהה' else '#ffffff')))
-        painter.drawRoundedRect(rect,8,8)
 
-        dark=self.owner.settings.get('theme')=='כהה'
+        bg=QColor('#2b2638' if dark else '#ffffff')
+        if selected: bg=QColor('#38304d' if dark else '#f0edfb')
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(bg)
+        painter.drawRoundedRect(rect,9,9)
+
         primary=QColor('#f3f0fb' if dark else '#252238')
         muted=QColor('#aaa3bd' if dark else '#77718a')
         accent=QColor('#b9a8ff' if dark else '#6045d8')
-        line=QColor('#3b354b' if dark else '#eeeaf4')
+        border=QColor('#494257' if dark else '#e6e1ef')
 
-        # Font family and metadata occupy the right-hand side of each horizontal row.
-        right=rect.right()-18
+        # Keep metadata narrow so the user's sample text gets most of the row.
+        right=rect.right()-14
+        meta_left=right-158
         painter.setPen(primary)
-        painter.setFont(QFont('Segoe UI',12,QFont.Weight.DemiBold))
-        painter.drawText(right-245,rect.top()+13,245,25,Qt.AlignmentFlag.AlignRight|Qt.AlignmentFlag.AlignVCenter,item.get('family',''))
+        painter.setFont(QFont('Segoe UI',11,QFont.Weight.DemiBold))
+        painter.drawText(meta_left,rect.top()+10,158,24,
+                         Qt.AlignmentFlag.AlignRight|Qt.AlignmentFlag.AlignVCenter,
+                         item.get('family',''))
         painter.setPen(muted)
         painter.setFont(QFont('Segoe UI',8))
-        weights=', '.join((item.get('weights') or '').split(','))
-        painter.drawText(right-245,rect.top()+40,245,19,Qt.AlignmentFlag.AlignRight|Qt.AlignmentFlag.AlignVCenter,
-                         f"{item.get('count',0)} סגנונות  •  {weights[:54]}")
-
+        weights=(item.get('weights') or '').strip()
+        painter.drawText(meta_left,rect.top()+34,158,18,
+                         Qt.AlignmentFlag.AlignRight|Qt.AlignmentFlag.AlignVCenter,
+                         f"{item.get('count',0)} סגנונות  •  {weights[:30]}")
         status='חסר קובץ' if item.get('missing') else ('מותקן' if item.get('installed') else 'לא מותקן')
-        status_color=QColor('#d97757' if item.get('missing') else ('#48a887' if item.get('installed') else muted))
+        status_color=QColor('#e18a70' if item.get('missing') else ('#4bb58e' if item.get('installed') else muted))
         painter.setPen(status_color)
         painter.setFont(QFont('Segoe UI',8,QFont.Weight.DemiBold))
-        painter.drawText(right-245,rect.top()+62,245,17,Qt.AlignmentFlag.AlignRight|Qt.AlignmentFlag.AlignVCenter,status)
+        painter.drawText(meta_left,rect.top()+54,158,17,
+                         Qt.AlignmentFlag.AlignRight|Qt.AlignmentFlag.AlignVCenter,status)
 
-        # The preview remains a single line and uses the actual font file.
         lang=self.owner.current_language()
         custom_text=self.owner.preview_text.text().strip() if hasattr(self.owner,'preview_text') else ''
         sample=custom_text or ((SAMPLE_ALPHABET if self.owner.settings.get('sample_mode')=='אלפבית' else SAMPLE_SENTENCE)
                                if lang in ('all','he') else LANGUAGE_SAMPLES.get(lang,SAMPLE_SENTENCE))
         font=self.font_for_item(item)
         font.setPointSize(int(self.owner.settings.get('preview_size',28)))
-        preview_rect=rect.adjusted(270,10,-285,-10)
+        preview_rect=rect.adjusted(178,7,-174,-7)
         preview_sample=QFontMetrics(font).elidedText(sample,Qt.TextElideMode.ElideLeft,preview_rect.width())
         painter.setFont(font)
         painter.setPen(QColor(self.owner.settings.get('preview_color','#4e3a98')))
         painter.drawText(preview_rect,Qt.AlignmentFlag.AlignVCenter|Qt.AlignmentFlag.AlignRight|Qt.TextFlag.TextSingleLine,preview_sample)
 
-        # Compact actions are aligned on the left; no tile/card grid is used.
+        # Purposeful action hierarchy: subtle preview, prominent install, quiet favorite.
         from PySide6.QtCore import QRect
-        actions=[('התנסות','try'),('התקנה','install'),('★' if item.get('favorite') else '☆','favorite')]
+        actions=[('התנסות','try',68),('התקן','install',62),('★' if item.get('favorite') else '☆','favorite',30)]
         x=rect.left()+12
-        painter.setFont(QFont('Segoe UI',8,QFont.Weight.DemiBold))
-        for label,key in actions:
-            w=62 if key!='favorite' else 32
-            button_rect=QRect(x,rect.top()+30,w,30)
-            painter.setPen(QPen(line))
-            painter.setBrush(QColor('#302a40' if dark else '#f7f5fb'))
-            painter.drawRoundedRect(button_rect,6,6)
-            painter.setPen(accent)
+        y=rect.top()+29
+        for label,key,w in actions:
+            button_rect=QRect(x,y,w,32)
+            if key=='install':
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QColor('#765be8' if dark else '#654bd1'))
+                painter.drawRoundedRect(button_rect,7,7)
+                painter.setPen(QColor('#ffffff'))
+            else:
+                painter.setPen(QPen(border))
+                painter.setBrush(QColor('#332d42' if dark else '#faf9fc'))
+                painter.drawRoundedRect(button_rect,7,7)
+                painter.setPen(accent)
+            painter.setFont(QFont('Segoe UI',8,QFont.Weight.DemiBold))
             painter.drawText(button_rect,Qt.AlignmentFlag.AlignCenter,label)
             x+=w+6
         painter.restore()
+
     def editorEvent(self, event, model, option, index):
         from PySide6.QtCore import QEvent, QRect
         if event.type()!=QEvent.Type.MouseButtonRelease or event.button()!=Qt.MouseButton.LeftButton:
@@ -429,10 +442,9 @@ class FamilyDelegate(QStyledItemDelegate):
         item=index.data(FontListModel.FamilyRole) or {}
         rect=option.rect.adjusted(8,3,-8,-3)
         x=rect.left()+12
-        y=rect.top()+30
-        for key,w in [('try',62),('install',62),('favorite',32)]:
-            hit=QRect(x,y,w,30)
-            if hit.contains(event.position().toPoint()):
+        y=rect.top()+29
+        for key,w in [('try',68),('install',62),('favorite',30)]:
+            if QRect(x,y,w,32).contains(event.position().toPoint()):
                 family=item.get('family','')
                 if key=='try':
                     self.owner.try_family(family)
