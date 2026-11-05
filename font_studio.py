@@ -340,7 +340,16 @@ class FamilyDelegate(QStyledItemDelegate):
         font=self.font_for_item(item); font.setPointSize(int(self.owner.settings.get('preview_size',28)))
         painter.setFont(font); painter.setPen(QColor(self.owner.settings.get('preview_color','#4e3a98'))) 
         sample_rect=rect.adjusted(18,55,-300,-8)
-        painter.drawText(sample_rect,Qt.AlignmentFlag.AlignVCenter|Qt.AlignmentFlag.AlignRight|Qt.TextFlag.TextWordWrap,sample)
+        # Keep every font preview on one line; shorten only the displayed text when it
+        # does not fit instead of allowing the sample to wrap into a second line.
+        preview_sample=QFontMetrics(font).elidedText(
+            sample, Qt.TextElideMode.ElideLeft, sample_rect.width()
+        )
+        painter.drawText(
+            sample_rect,
+            Qt.AlignmentFlag.AlignVCenter|Qt.AlignmentFlag.AlignRight|Qt.TextFlag.TextSingleLine,
+            preview_sample
+        )
         # Clickable action chips are painted by the delegate, avoiding thousands of QWidget controls.
         actions=[('התנסות', 'try'), ('התקנה', 'install'), ('☆' if not item.get('favorite') else '★', 'favorite')]
         x=rect.right()-112
