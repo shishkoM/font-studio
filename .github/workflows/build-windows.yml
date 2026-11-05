@@ -43,3 +43,18 @@ jobs:
           prerelease: true
           make_latest: false
           files: dist/FontStudio.exe
+
+      # Keep a stable download URL pointing to the newest successful manual build.
+      # Historical build-N releases remain unchanged.
+      - name: Update rolling latest EXE release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Font Studio latest
+          body: |
+            Rolling download for the newest successful manual Windows x64 build.
+            Direct download: https://github.com/${{ github.repository }}/releases/download/latest/FontStudio.exe
+            Historical builds remain available under their build-N tags.
+          prerelease: true
+          make_latest: false
+          files: dist/FontStudio.exe
