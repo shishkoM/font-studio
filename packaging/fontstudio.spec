@@ -9,7 +9,7 @@ from PyInstaller.utils.hooks import collect_submodules
 block_cipher = None
 
 # Resolve all build inputs relative to this spec file, not the process working directory.
-project_root = Path(SPECPATH).resolve().parent.parent
+project_root = Path(SPECPATH).resolve().parent
 
 a = Analysis(
     [str(project_root / "font_studio.py")],
