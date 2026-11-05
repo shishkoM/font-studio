@@ -408,7 +408,7 @@ class FamilyDelegate(QStyledItemDelegate):
                                if lang in ('all','he') else LANGUAGE_SAMPLES.get(lang,SAMPLE_SENTENCE))
         font=self.font_for_item(item)
         font.setPointSize(int(self.owner.settings.get('preview_size',28)))
-        preview_rect=rect.adjusted(188,7,-146,-7)
+        preview_rect=rect.adjusted(198,7,-130,-7)
         preview_sample=QFontMetrics(font).elidedText(sample,Qt.TextElideMode.ElideLeft,preview_rect.width())
         painter.setFont(font)
         painter.setPen(QColor(self.owner.settings.get('preview_color','#4e3a98')))
@@ -416,16 +416,16 @@ class FamilyDelegate(QStyledItemDelegate):
 
         # Purposeful action hierarchy: subtle preview, prominent install, quiet favorite.
         from PySide6.QtCore import QRect
-        actions=[('התנסות','try',68),('התקנה','install',72),('★' if item.get('favorite') else '☆','favorite',28)]
+        actions=[('התנסות','try',68),('מותקן' if item.get('installed') else 'התקנה','install',72),('★' if item.get('favorite') else '☆','favorite',28)]
         x=rect.left()+12
         y=rect.top()+27
         for label,key,w in actions:
             button_rect=QRect(x,y,w,34)
             if key=='install':
                 painter.setPen(Qt.PenStyle.NoPen)
-                painter.setBrush(QColor('#765be8' if dark else '#654bd1'))
+                painter.setBrush(QColor('#315f50' if item.get('installed') and dark else '#e5f3ed' if item.get('installed') else '#765be8' if dark else '#654bd1'))
                 painter.drawRoundedRect(button_rect,7,7)
-                painter.setPen(QColor('#ffffff'))
+                painter.setPen(QColor('#a9e0c8' if dark else '#287a59') if item.get('installed') else QColor('#ffffff'))
             else:
                 painter.setPen(QPen(border))
                 painter.setBrush(QColor('#332d42' if dark else '#faf9fc'))
@@ -450,7 +450,8 @@ class FamilyDelegate(QStyledItemDelegate):
                 if key=='try':
                     self.owner.try_family(family)
                 elif key=='install':
-                    self.owner.install_family(family)
+                    if not item.get('installed'):
+                        self.owner.install_family(family)
                 else:
                     self.owner.db.toggle_favorite(family)
                     self.owner.refresh()
