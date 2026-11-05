@@ -532,38 +532,7 @@ class FontStudio(QMainWindow):
         shell.setContentsMargins(0,0,0,0)
         shell.setSpacing(0)
 
-        # Fixed navigation rail: the application logic stays in the existing main window.
-        sidebar=QFrame()
-        sidebar.setObjectName('sidebar')
-        sidebar.setFixedWidth(205)
-        nav=QVBoxLayout(sidebar)
-        nav.setContentsMargins(18,24,18,20)
-        nav.setSpacing(9)
-        brand=QLabel('Font Studio')
-        brand.setObjectName('brand')
-        nav.addWidget(brand)
-        nav.addSpacing(22)
-        nav_caption=QLabel('ספרייה')
-        nav_caption.setObjectName('navCaption')
-        nav.addWidget(nav_caption)
-        self.nav_library=QPushButton('  כל הגופנים')
-        self.nav_library.setObjectName('navButton')
-        self.nav_library.setCheckable(True)
-        self.nav_library.setChecked(True)
-        self.nav_library.clicked.connect(lambda: self.favorites.setChecked(False))
-        nav.addWidget(self.nav_library)
-        self.nav_favorites=QPushButton('  מועדפים')
-        self.nav_favorites.setObjectName('navButton')
-        self.nav_favorites.setCheckable(True)
-        self.nav_favorites.clicked.connect(lambda: self.favorites.setChecked(True))
-        nav.addWidget(self.nav_favorites)
-        nav.addStretch()
-        self.sidebar_hint=QLabel('ניהול גופנים\nחיפוש • תצוגה • התקנה')
-        self.sidebar_hint.setObjectName('sidebarHint')
-        nav.addWidget(self.sidebar_hint)
-        shell.addWidget(sidebar)
-
-        content=QWidget()
+        # Main content uses the full window width; navigation stays in the toolbar controls.\n        content=QWidget()
         content.setObjectName('content')
         root=QVBoxLayout(content)
         root.setContentsMargins(28,24,28,18)
@@ -666,13 +635,6 @@ class FontStudio(QMainWindow):
         self.statusBar().setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         shell.addWidget(content,1)
         self.update_navigation()
-
-    def update_navigation(self):
-        if not hasattr(self,'nav_library'):
-            return
-        favorites=self.favorites.isChecked()
-        self.nav_library.setChecked(not favorites)
-        self.nav_favorites.setChecked(favorites)
 
     def apply_theme(self):
         if self.settings.get('theme')=='כהה':
