@@ -333,7 +333,7 @@ class FontListModel(QAbstractListModel):
         item=self.items[index.row()]
         if role == self.FamilyRole: return item
         if role == Qt.ItemDataRole.DisplayRole: return item['family']
-        if role == Qt.ItemDataRole.SizeHintRole: return QSize(700, 92)
+        if role == Qt.ItemDataRole.SizeHintRole: return QSize(700, 88)
         return None
     def replace(self, items):
         self.beginResetModel(); self.items=items; self.endResetModel()
@@ -382,23 +382,24 @@ class FamilyDelegate(QStyledItemDelegate):
 
         # Keep metadata narrow so the user's sample text gets most of the row.
         right=rect.right()-14
-        meta_left=right-158
+        meta_left=right-132
         painter.setPen(primary)
         painter.setFont(QFont('Segoe UI',11,QFont.Weight.DemiBold))
-        painter.drawText(meta_left,rect.top()+10,158,24,
+        family_text=QFontMetrics(painter.font()).elidedText(item.get('family',''),Qt.TextElideMode.ElideLeft,132)
+        painter.drawText(meta_left,rect.top()+10,132,24,
                          Qt.AlignmentFlag.AlignRight|Qt.AlignmentFlag.AlignVCenter,
-                         item.get('family',''))
+                         family_text)
         painter.setPen(muted)
         painter.setFont(QFont('Segoe UI',8))
         weights=(item.get('weights') or '').strip()
-        painter.drawText(meta_left,rect.top()+34,158,18,
+        painter.drawText(meta_left,rect.top()+34,132,18,
                          Qt.AlignmentFlag.AlignRight|Qt.AlignmentFlag.AlignVCenter,
                          f"{item.get('count',0)} סגנונות  •  {weights[:30]}")
         status='חסר קובץ' if item.get('missing') else ('מותקן' if item.get('installed') else 'לא מותקן')
         status_color=QColor('#e18a70' if item.get('missing') else ('#4bb58e' if item.get('installed') else muted))
         painter.setPen(status_color)
         painter.setFont(QFont('Segoe UI',8,QFont.Weight.DemiBold))
-        painter.drawText(meta_left,rect.top()+54,158,17,
+        painter.drawText(meta_left,rect.top()+54,132,17,
                          Qt.AlignmentFlag.AlignRight|Qt.AlignmentFlag.AlignVCenter,status)
 
         lang=self.owner.current_language()
@@ -407,7 +408,7 @@ class FamilyDelegate(QStyledItemDelegate):
                                if lang in ('all','he') else LANGUAGE_SAMPLES.get(lang,SAMPLE_SENTENCE))
         font=self.font_for_item(item)
         font.setPointSize(int(self.owner.settings.get('preview_size',28)))
-        preview_rect=rect.adjusted(178,7,-174,-7)
+        preview_rect=rect.adjusted(188,7,-146,-7)
         preview_sample=QFontMetrics(font).elidedText(sample,Qt.TextElideMode.ElideLeft,preview_rect.width())
         painter.setFont(font)
         painter.setPen(QColor(self.owner.settings.get('preview_color','#4e3a98')))
@@ -415,11 +416,11 @@ class FamilyDelegate(QStyledItemDelegate):
 
         # Purposeful action hierarchy: subtle preview, prominent install, quiet favorite.
         from PySide6.QtCore import QRect
-        actions=[('התנסות','try',68),('התקן','install',62),('★' if item.get('favorite') else '☆','favorite',30)]
+        actions=[('התנסות','try',68),('התקנה','install',72),('★' if item.get('favorite') else '☆','favorite',28)]
         x=rect.left()+12
-        y=rect.top()+29
+        y=rect.top()+27
         for label,key,w in actions:
-            button_rect=QRect(x,y,w,32)
+            button_rect=QRect(x,y,w,34)
             if key=='install':
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.setBrush(QColor('#765be8' if dark else '#654bd1'))
@@ -432,7 +433,7 @@ class FamilyDelegate(QStyledItemDelegate):
                 painter.setPen(accent)
             painter.setFont(QFont('Segoe UI',8,QFont.Weight.DemiBold))
             painter.drawText(button_rect,Qt.AlignmentFlag.AlignCenter,label)
-            x+=w+6
+            x+=w+5
         painter.restore()
 
     def editorEvent(self, event, model, option, index):
@@ -442,9 +443,9 @@ class FamilyDelegate(QStyledItemDelegate):
         item=index.data(FontListModel.FamilyRole) or {}
         rect=option.rect.adjusted(8,3,-8,-3)
         x=rect.left()+12
-        y=rect.top()+29
-        for key,w in [('try',68),('install',62),('favorite',30)]:
-            if QRect(x,y,w,32).contains(event.position().toPoint()):
+        y=rect.top()+27
+        for key,w in [('try',68),('install',72),('favorite',28)]:
+            if QRect(x,y,w,34).contains(event.position().toPoint()):
                 family=item.get('family','')
                 if key=='try':
                     self.owner.try_family(family)
@@ -454,7 +455,7 @@ class FamilyDelegate(QStyledItemDelegate):
                     self.owner.db.toggle_favorite(family)
                     self.owner.refresh()
                 return True
-            x+=w+6
+            x+=w+5
         return False
 
     def sizeHint(self, option, index): return QSize(700, 92)
